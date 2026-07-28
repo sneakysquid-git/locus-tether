@@ -24,6 +24,17 @@ services:
     restart: unless-stopped
     runtime: nvidia
     environment:
+      # --- Required for the NVIDIA container runtime hook to actually inject
+      # GPU devices — confirmed by testing on this exact hardware that
+      # `runtime: nvidia` alone was NOT sufficient; without these two vars
+      # explicitly set, the hook injects nothing at all (no /dev/nvidia*
+      # nodes show up in the container, even though the host has them and
+      # the CSV mount-spec files are correctly configured). Thor doesn't
+      # support the more common `--gpus=all` shorthand, which normally sets
+      # these implicitly — so on this hardware they must be set by hand.
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+
       # --- MPS client wiring ---
       # Cap this container to 25% of the GPU's SMs, leaving the rest free.
       # Raise/lower this once you've benchmarked actual transcription speed

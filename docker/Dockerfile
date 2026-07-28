@@ -40,7 +40,22 @@
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV CUDA_ARCH=110
+# History of the CUDA-architecture flag for this build, in case it needs
+# revisiting on a future CTranslate2/CMake version:
+#   1st attempt: -DCMAKE_CUDA_ARCHITECTURES=110 — wrong variable name for
+#      this project entirely; CTranslate2 doesn't use CMake's native CUDA
+#      language variable, so this was silently ignored.
+#   2nd attempt: -DCUDA_ARCH_LIST=11.0 — the right variable name (fed into
+#      the legacy FindCUDA-based cuda_select_nvcc_arch_flags() macro), but
+#      that macro (bundled with CMake 3.28) has a hardcoded, fixed table of
+#      recognized GPU architecture names/numbers that simply doesn't include
+#      Thor's compute capability (11.0 / sm_110) — it's newer than that
+#      table. No amount of reformatting the number fixes this; it's not a
+#      formatting problem, the entry just isn't there.
+#   Final fix: skip that macro's lookup entirely. The RUN block below
+#   sed-patches CTranslate2's CMakeLists.txt to hardcode the correct
+#   -gencode flags for sm_110 directly, rather than asking CMake to resolve
+#   them from a table that predates this hardware.
 
 # --- Install CUDA 13.2 toolkit + cuDNN from the real Jetson (L4T) repo ------
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -73,21 +88,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /opt/build
 RUN git clone --recursive https://github.com/OpenNMT/CTranslate2.git ctranslate2 \
     && cd ctranslate2 \
+    && sed -i 's/cuda_select_nvcc_arch_flags(ARCH_FLAGS \${CUDA_ARCH_LIST})/set(ARCH_FLAGS "-gencode;arch=compute_110,code=sm_110")/' CMakeLists.txt \
     && mkdir build && cd build \
     && cmake -DCMAKE_BUILD_TYPE=Release \
              -DWITH_CUDA=ON \
              -DWITH_CUDNN=ON \
-             -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} \
              -DWITH_MKL=OFF \
              -DWITH_OPENBLAS=ON \
+             -DOPENMP_RUNTIME=COMP \
              .. \
     && make -j"$(nproc)" \
     && make install \
     && ldconfig \
     && cd /opt/build/ctranslate2/python \
-    && pip3 install --no-cache-dir -r install_requirements.txt \
+    && pip3 install --break-system-packages --no-cache-dir -r install_requirements.txt \
     && python3 setup.py bdist_wheel \
-    && pip3 install --no-cache-dir dist/*.whl
+    && pip3 install --break-system-packages --no-cache-dir dist/*.whl
 
 # --- App dependencies -------------------------------------------------------
 WORKDIR /app
@@ -96,8 +112,8 @@ COPY docker/requirements-docker.txt .
 # down the CPU-only PyPI ctranslate2 wheel and silently shadow the GPU build
 # we just compiled above. Its other dependencies are pinned explicitly in
 # requirements-docker.txt instead.
-RUN pip3 install --no-cache-dir --no-deps faster-whisper \
-    && pip3 install --no-cache-dir -r requirements-docker.txt
+RUN pip3 install --break-system-packages --no-cache-dir --no-deps faster-whisper \
+    && pip3 install --break-system-packages --no-cache-dir -r requirements-docker.txt
 
 COPY config.py transcribe.py watcher.py ./
 COPY docker/entrypoint.sh /entrypoint.sh
