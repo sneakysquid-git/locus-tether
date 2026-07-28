@@ -1,0 +1,69 @@
+# Run from the repo root with a `.env` file present (copy docker/.env.example
+# to `.env` and adjust OMI_DATA_DIR first):
+#   docker compose -f docker/docker-compose.yml up -d --build
+#
+# The volumes below read ${OMI_DATA_DIR} from that .env file — it should
+# point at a DATA directory kept separate from this code repo (e.g.
+# /home/efranklin/omi-data). See README's "Directory layout on the Thor".
+#
+# Prerequisites on the Thor host before this will actually use the GPU/MPS:
+#   1. NVIDIA container runtime installed and set as the default runtime
+#      (usually already true on JetPack images, but confirm:
+#      `cat /etc/docker/daemon.json` should show "default-runtime": "nvidia").
+#   2. Host MPS control daemon running — see host-setup/enable-mps.sh.
+#   3. The inbox/processing/archive/transcripts/failed directories referenced
+#      below should already exist on the host, or Docker will create them
+#      as root-owned, which is fine for a single-user box but worth knowing.
+
+services:
+  omi-pipeline:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: omi-pipeline
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      # --- MPS client wiring ---
+      # Cap this container to 25% of the GPU's SMs, leaving the rest free.
+      # Raise/lower this once you've benchmarked actual transcription speed
+      # against how much headroom your robotics work needs. This is a soft
+      # cap, not a hard reservation — if nothing else is using the GPU,
+      # this container is NOT artificially throttled to 25% of total
+      # throughput; the cap only matters when something else is contending
+      # for the same SMs at the same time.
+      CUDA_MPS_ACTIVE_THREAD_PERCENTAGE: "25"
+      CUDA_MPS_PIPE_DIRECTORY: /tmp/nvidia-mps
+      CUDA_MPS_LOG_DIRECTORY: /tmp/nvidia-log
+
+      # --- Pipeline config (see config.py for the full list) ---
+      # Must match the /app/... mount points below, since config.py derives
+      # inbox/processing/archive/transcripts/failed as subdirs of this.
+      OMI_PIPELINE_BASE: /app
+      OMI_WHISPER_MODEL: large-v3
+      OMI_WHISPER_DEVICE: cuda
+      OMI_WHISPER_COMPUTE_TYPE: float16
+    volumes:
+      # Host MPS directories, shared with the host daemon started by
+      # host-setup/enable-mps.sh — this container is a client of that daemon,
+      # not running its own.
+      - /tmp/nvidia-mps:/tmp/nvidia-mps
+      - /tmp/nvidia-log:/tmp/nvidia-log
+
+      # Pipeline DATA directories on the host — ${OMI_DATA_DIR} here comes
+      # from your .env file (see docker/.env.example) and should point at a
+      # directory separate from this code repo, e.g. /home/efranklin/omi-data.
+      # (Deliberately a different variable name than OMI_PIPELINE_BASE above —
+      # that one is the in-container path, this one is the host path, and
+      # they should NOT be the same string or this gets confusing fast.)
+      - ${OMI_DATA_DIR}/inbox:/app/inbox
+      - ${OMI_DATA_DIR}/processing:/app/processing
+      - ${OMI_DATA_DIR}/archive:/app/archive
+      - ${OMI_DATA_DIR}/transcripts:/app/transcripts
+      - ${OMI_DATA_DIR}/failed:/app/failed
+
+      # Cache the Whisper model download across container restarts/rebuilds.
+      - whisper-model-cache:/root/.cache/huggingface
+
+volumes:
+  whisper-model-cache:

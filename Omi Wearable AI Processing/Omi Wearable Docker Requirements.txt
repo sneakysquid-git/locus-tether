@@ -1,0 +1,9 @@
+# ctranslate2 is intentionally NOT listed here — it's built from source in the
+# Dockerfile with CUDA support for Thor. Listing it here would let pip pull the
+# CPU-only aarch64 PyPI wheel and overwrite that build.
+
+watchdog>=4.0
+huggingface_hub>=0.20
+tokenizers>=0.15
+onnxruntime>=1.17
+av>=11.0

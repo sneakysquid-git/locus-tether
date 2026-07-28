@@ -1,0 +1,15 @@
+[Unit]
+Description=NVIDIA CUDA MPS Control Daemon
+After=multi-user.target
+
+[Service]
+Type=forking
+Environment=CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps
+Environment=CUDA_MPS_LOG_DIRECTORY=/tmp/nvidia-log
+ExecStartPre=/bin/mkdir -p /tmp/nvidia-mps /tmp/nvidia-log
+ExecStart=/usr/bin/nvidia-cuda-mps-control -d
+ExecStop=/bin/bash -c 'echo quit | /usr/bin/nvidia-cuda-mps-control'
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

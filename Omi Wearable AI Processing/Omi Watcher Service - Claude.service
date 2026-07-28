@@ -1,0 +1,17 @@
+[Unit]
+Description=Omi audio watcher/transcriber (bare-metal, no Docker)
+After=network.target
+
+[Service]
+Type=simple
+User=efranklin
+WorkingDirectory=/home/efranklin/projects/omi-pipeline
+# Note: this points at the DATA directory (~/omi-data), not the code repo —
+# same separation described in README's "Directory layout on the Thor".
+Environment=OMI_PIPELINE_BASE=/home/efranklin/omi-data
+ExecStart=/home/efranklin/projects/omi-pipeline/.venv/bin/python /home/efranklin/projects/omi-pipeline/watcher.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
