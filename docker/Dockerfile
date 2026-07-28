@@ -9,38 +9,57 @@
 #
 # IMPORTANT: as of this build, NGC has NOT published an l4t-jetpack tag for
 # L4T R39.x (verified directly against the registry API — the latest
-# available tag is r36.4.0). Rather than wait on that, this Dockerfile uses
-# plain ubuntu:24.04 as the base and relies on the NVIDIA container runtime's
-# CSV mount mechanism (the Jetson-specific method of injecting CUDA/cuDNN/
-# driver libraries from the HOST into any container at launch — this is how
-# l4t-jetpack images get their CUDA too, it's not baked into the image layer)
-# to supply CUDA 13.2 matching your actual host install. This should be more
-# correct than a prebuilt tag anyway, since it's guaranteed to match your
-# real hardware rather than whatever CUDA point-release NGC happened to bake in.
+# available tag is r36.4.0). This Dockerfile uses plain ubuntu:24.04 as the
+# base instead.
 #
-# One thing to verify before trusting the full build: whether the CSV mounts
-# on this host include the CUDA *toolkit* (nvcc, headers) needed to compile
-# against, not just runtime .so files needed to merely run precompiled CUDA
-# binaries. Quick check before running the full build below:
-#   docker run --rm --runtime nvidia ubuntu:24.04 bash -c "ls /usr/local/cuda/bin/nvcc"
-# If that 404s / file-not-found's, the toolkit isn't being mounted and we'll
-# need to install cuda-toolkit-13-2 via apt inside the container instead
-# (NVIDIA's cuda-keyring package + apt, same as a normal x86 CUDA install,
-# just for aarch64) rather than depending on the host mount for build-time use.
+# An earlier version of this Dockerfile relied on the NVIDIA container
+# runtime's CSV mount mechanism to inject the host's CUDA toolkit at
+# container start. That does NOT reliably apply during `docker build` —
+# BuildKit manages its own build workers and doesn't consistently honor
+# `--runtime nvidia` / the daemon's default-runtime setting the way a plain
+# `docker run` does (this is what caused the cmake CUDA-detection failure).
+# Since compiling CUDA code (nvcc) doesn't need a live GPU anyway, this
+# version installs the CUDA toolkit directly via apt instead — self-
+# contained, no dependency on build-time runtime behavior.
 #
-# This container is meant to run with the NVIDIA container runtime. On this
-# machine that's already the Docker default (`default-runtime: nvidia` in
-# /etc/docker/daemon.json), so no extra flag is strictly needed, but
-# docker-compose.yml sets `runtime: nvidia` explicitly anyway — Thor does NOT
-# support the more common `--gpus=all` flag/option, only `--runtime=nvidia`.
+# A second wrong turn along the way: the *generic* NVIDIA CUDA repo
+# (developer.download.nvidia.com/.../ubuntu2404/arm64/) is for SBSA — server-
+# class ARM64 with discrete GPUs (Grace-Hopper, Graviton, etc.) — and does
+# NOT publish cuda-toolkit packages for Jetson/Tegra at all, only some shared
+# packages like cuDNN (which is why that part appeared to work while the
+# toolkit silently didn't exist there). The real source, confirmed by
+# checking the actual host's /etc/apt/sources.list.d/nvidia-l4t-apt-source.list,
+# is repo.download.nvidia.com/jetson/common — a completely different repo,
+# trusted via the jetson-ota-public key rather than the generic cuda-keyring
+# package. Both are used below.
+#
+# This container still needs `--runtime nvidia` (not `--gpus=all`, which
+# Thor doesn't support) at RUN time, to actually access the GPU — that part
+# was never the problem, only the build-time toolkit availability was.
 
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_ARCH=110
 
+# --- Install CUDA 13.2 toolkit + cuDNN from the real Jetson (L4T) repo ------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake git curl wget \
+        ca-certificates wget gnupg \
+    && wget -qO /etc/apt/trusted.gpg.d/jetson-ota-public.asc \
+        https://repo.download.nvidia.com/jetson/jetson-ota-public.asc \
+    && echo "deb https://repo.download.nvidia.com/jetson/common r39.2 main" \
+        > /etc/apt/sources.list.d/nvidia-l4t-apt-source.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        cuda-toolkit-13-2 \
+        libcudnn9-dev-cuda-13 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH=/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake git curl \
     python3 python3-pip python3-dev \
     ffmpeg \
     libopenblas-dev \
@@ -72,7 +91,7 @@ RUN git clone --recursive https://github.com/OpenNMT/CTranslate2.git ctranslate2
 
 # --- App dependencies -------------------------------------------------------
 WORKDIR /app
-COPY requirements-docker.txt .
+COPY docker/requirements-docker.txt .
 # --no-deps is deliberate: faster-whisper's normal install would happily pull
 # down the CPU-only PyPI ctranslate2 wheel and silently shadow the GPU build
 # we just compiled above. Its other dependencies are pinned explicitly in
