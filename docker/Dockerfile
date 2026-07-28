@@ -3,23 +3,30 @@
 # Values below are confirmed against the real device (not placeholders):
 #   - L4T release: R39.2 / JetPack 7.2 (from `cat /etc/nv_tegra_release`)
 #   - Compute capability: 11.0 (from `nvidia-smi --query-gpu=compute_cap`),
-#     i.e. CMAKE_CUDA_ARCHITECTURES=110 — trust nvidia-smi on real hardware
-#     over secondary sources that reference sm_101 for Thor.
-#   - CUDA toolkit: 13.2, per community reports building on this exact
-#     hardware/L4T combo (dusty-nv/jetson-containers issue #1661).
+#     i.e. CMAKE_CUDA_ARCHITECTURES=110.
+#   - CUDA toolkit: 13.2, per community reports on this exact hardware/L4T
+#     combo (dusty-nv/jetson-containers issue #1661).
 #
-# If the exact `l4t-jetpack:r39.2.0` tag below 404s on NGC (JetPack 7.2 is
-# very recent, the matching container tag may lag the OS release slightly),
-# check https://catalog.ngc.nvidia.com/orgs/nvidia/containers/l4t-jetpack/tags
-# for the closest available r39.x tag.
+# IMPORTANT: as of this build, NGC has NOT published an l4t-jetpack tag for
+# L4T R39.x (verified directly against the registry API — the latest
+# available tag is r36.4.0). Rather than wait on that, this Dockerfile uses
+# plain ubuntu:24.04 as the base and relies on the NVIDIA container runtime's
+# CSV mount mechanism (the Jetson-specific method of injecting CUDA/cuDNN/
+# driver libraries from the HOST into any container at launch — this is how
+# l4t-jetpack images get their CUDA too, it's not baked into the image layer)
+# to supply CUDA 13.2 matching your actual host install. This should be more
+# correct than a prebuilt tag anyway, since it's guaranteed to match your
+# real hardware rather than whatever CUDA point-release NGC happened to bake in.
 #
-# Known gotcha (per jetson-containers issue #1661, same hardware/L4T combo):
-# some Jetson-specific pip indexes (e.g. pypi.jetson-ai-lab.io) are missing
-# common packages like numpy/huggingface_hub for the cu132/sbsa target,
-# causing installs to fail with "not found in package registry." This
-# Dockerfile installs from standard PyPI by default, but if the base image's
-# pip config redirects elsewhere and installs start failing that way, add
-# `--extra-index-url https://pypi.org/simple` to the affected pip3 commands.
+# One thing to verify before trusting the full build: whether the CSV mounts
+# on this host include the CUDA *toolkit* (nvcc, headers) needed to compile
+# against, not just runtime .so files needed to merely run precompiled CUDA
+# binaries. Quick check before running the full build below:
+#   docker run --rm --runtime nvidia ubuntu:24.04 bash -c "ls /usr/local/cuda/bin/nvcc"
+# If that 404s / file-not-found's, the toolkit isn't being mounted and we'll
+# need to install cuda-toolkit-13-2 via apt inside the container instead
+# (NVIDIA's cuda-keyring package + apt, same as a normal x86 CUDA install,
+# just for aarch64) rather than depending on the host mount for build-time use.
 #
 # This container is meant to run with the NVIDIA container runtime. On this
 # machine that's already the Docker default (`default-runtime: nvidia` in
@@ -27,7 +34,7 @@
 # docker-compose.yml sets `runtime: nvidia` explicitly anyway — Thor does NOT
 # support the more common `--gpus=all` flag/option, only `--runtime=nvidia`.
 
-FROM nvcr.io/nvidia/l4t-jetpack:r39.2.0
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_ARCH=110
