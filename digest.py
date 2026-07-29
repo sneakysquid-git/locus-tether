@@ -178,14 +178,10 @@ def render_html(target_date: date, analyses: list[dict], things_link: Optional[s
 
         if things_link:
             parts.append(
-                f'<a href="{things_link}" style="display: inline-block; margin: 12px 0; '
-                'padding: 10px 18px; background-color: #2d3436; color: #ffffff; '
-                'text-decoration: none; border-radius: 6px; font-size: 14px;">'
-                "Add all to Things 3</a>"
-            )
-            parts.append(
-                '<p style="color: #b2bec3; font-size: 12px; margin-top: -4px;">'
-                "(Only works when opened on a Mac/iPhone/iPad with Things 3 installed.)</p>"
+                '<p style="background-color: #f1f2f6; padding: 10px 14px; border-radius: 6px; '
+                'font-size: 13px; color: #2d3436;">'
+                "&#128206; See the attached file to add these to Things 3 "
+                "(open it on a Mac/iPhone/iPad with Things installed).</p>"
             )
 
     # --- Per-conversation detail ---
@@ -226,15 +222,45 @@ def render_html(target_date: date, analyses: list[dict], things_link: Optional[s
     return "".join(parts)
 
 
+def build_things_attachment(things_link: str) -> str:
+    """
+    A tiny standalone HTML file with a button linking to Things. Meant to be
+    attached to the email (not embedded inline) — see send_email()'s
+    docstring for why: Gmail strips the href from any inline link using a
+    non-standard URL scheme like things:///, but respects it fine once the
+    HTML is opened as a local file outside Gmail's own rendering (e.g.
+    double-clicking the attachment on a Mac, or opening it in Files on iOS).
+    """
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, Helvetica, Arial, sans-serif; text-align: center; padding: 40px;">
+<p style="color: #636e72; margin-bottom: 20px;">Tap below to add today's action items to Things 3.</p>
+<a href="{things_link}" style="display: inline-block; padding: 14px 28px; background-color: #2d3436;
+color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 16px;">Add to Things 3</a>
+</body></html>"""
+
+
 def send_email(target_date: date, markdown: str, html_body: str, things_link: Optional[str]) -> None:
     """
-    Emails the digest as a multipart message: a plain-text fallback (the
-    markdown, which reads fine unrendered) plus the HTML version most
-    clients will actually display. Does nothing if DIGEST_EMAIL_ENABLED is
-    false. Raises on failure rather than swallowing errors — caller decides
-    how to handle that (see main(), which logs and continues rather than
-    treating a failed send as fatal, since the markdown file itself was
-    already written successfully either way).
+    Emails the digest as a multipart/mixed message: an alternative
+    text+HTML body, plus (if there are any action items) a separate HTML
+    attachment for Things 3 import.
+
+    Why the Things link is a SEPARATE ATTACHMENT rather than a button
+    embedded directly in the HTML body: Gmail's HTML sanitizer strips the
+    href attribute entirely from any link using a non-standard URL scheme
+    like things:/// — this is a long-documented Gmail behavior, not
+    something specific to this email. An embedded button would always
+    render as inert plain text in Gmail specifically (Apple Mail is more
+    permissive, but Gmail is the common case). Opening the attachment
+    separately bypasses Gmail's live HTML rendering entirely — the browser
+    that opens the attachment handles the custom scheme normally.
+
+    Does nothing if DIGEST_EMAIL_ENABLED is false. Raises on failure rather
+    than swallowing errors — caller decides how to handle that (see main(),
+    which logs and continues rather than treating a failed send as fatal,
+    since the markdown file itself was already written successfully either
+    way).
     """
     if not config.DIGEST_EMAIL_ENABLED:
         return
@@ -256,16 +282,26 @@ def send_email(target_date: date, markdown: str, html_body: str, things_link: Op
             f"Check .env.digest (copy from .env.digest.example if it doesn't exist yet)."
         )
 
-    msg = MIMEMultipart("alternative")
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = f"Omi Daily Digest — {target_date.isoformat()}"
     msg["From"] = config.DIGEST_EMAIL_FROM
     msg["To"] = config.DIGEST_EMAIL_TO
+
+    body = MIMEMultipart("alternative")
     # Plain text part MUST be attached before the HTML part — email clients
     # that support multipart/alternative render the LAST part they
     # understand, so ordering here is what makes HTML the preferred display
     # while plain text remains the fallback for clients that don't render HTML.
-    msg.attach(MIMEText(markdown, "plain", "utf-8"))
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
+    body.attach(MIMEText(markdown, "plain", "utf-8"))
+    body.attach(MIMEText(html_body, "html", "utf-8"))
+    msg.attach(body)
+
+    if things_link:
+        attachment = MIMEText(build_things_attachment(things_link), "html", "utf-8")
+        attachment.add_header(
+            "Content-Disposition", "attachment", filename=f"add-to-things-{target_date.isoformat()}.html"
+        )
+        msg.attach(attachment)
 
     # Port 465 = implicit TLS from the start of the connection.
     # Port 587 (and most others) = plain connection, then upgrade via STARTTLS.
