@@ -56,17 +56,31 @@ def load_day_speech_coaching(target_date: date) -> list[dict]:
     every recording — see its own docstring), so this list is often empty;
     the digest only shows a "Speaking Style Feedback" section at all when
     you've actually chosen to run it on something that day.
+
+    Grouped by the date of the MATCHING CONVERSATION (its .analysis.json),
+    not by whenever speech_coach.py itself happened to be run — you might
+    run coaching on a recording days after it happened, and the feedback
+    should stay attached to that conversation's own digest day, not get
+    split off into whatever day you got around to running the script.
+    Falls back to the speech_coach.json's own mtime only if no matching
+    analysis exists at all.
     """
     results = []
     for path in sorted(config.TRANSCRIPTS_DIR.glob("*.speech_coach.json")):
-        mtime = datetime.fromtimestamp(path.stat().st_mtime).date()
-        if mtime != target_date:
+        stem = path.stem.removesuffix(".speech_coach")
+        analysis_path = config.TRANSCRIPTS_DIR / f"{stem}.analysis.json"
+        if analysis_path.exists():
+            relevant_date = datetime.fromtimestamp(analysis_path.stat().st_mtime).date()
+        else:
+            relevant_date = datetime.fromtimestamp(path.stat().st_mtime).date()
+
+        if relevant_date != target_date:
             continue
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        data["_stem"] = path.stem.removesuffix(".speech_coach")
+        data["_stem"] = stem
         results.append(data)
     return results
 
