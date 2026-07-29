@@ -49,15 +49,39 @@ def load_day_analyses(target_date: date) -> list[dict]:
     return results
 
 
-def render_markdown(target_date: date, analyses: list[dict]) -> str:
-    lines = [f"# Daily Digest — {target_date.isoformat()}", ""]
+def load_day_speech_coaching(target_date: date) -> list[dict]:
+    """
+    Returns every *.speech_coach.json in TRANSCRIPTS_DIR for target_date.
+    speech_coach.py is deliberately run on-demand (not automatically for
+    every recording — see its own docstring), so this list is often empty;
+    the digest only shows a "Speaking Style Feedback" section at all when
+    you've actually chosen to run it on something that day.
+    """
+    results = []
+    for path in sorted(config.TRANSCRIPTS_DIR.glob("*.speech_coach.json")):
+        mtime = datetime.fromtimestamp(path.stat().st_mtime).date()
+        if mtime != target_date:
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        data["_stem"] = path.stem.removesuffix(".speech_coach")
+        results.append(data)
+    return results
 
-    if not analyses:
+
+def render_markdown(target_date: date, analyses: list[dict], speech_coaching: Optional[list[dict]] = None) -> str:
+    lines = [f"# Daily Digest — {target_date.isoformat()}", ""]
+    speech_coaching = speech_coaching or []
+
+    if not analyses and not speech_coaching:
         lines.append("No conversations recorded today.")
         return "\n".join(lines)
 
-    lines.append(f"**{len(analyses)} conversation(s) recorded.**")
-    lines.append("")
+    if analyses:
+        lines.append(f"**{len(analyses)} conversation(s) recorded.**")
+        lines.append("")
 
     # --- Top summary: every open action item across the whole day, grouped
     # together first, since this is the part most worth seeing at a glance
@@ -77,29 +101,75 @@ def render_markdown(target_date: date, analyses: list[dict]) -> str:
         lines.append("")
 
     # --- Per-conversation detail
-    lines.append("## Conversations")
-    lines.append("")
-    for a in analyses:
-        emoji = a.get("emoji", "")
-        title = a.get("title", a["_stem"])
-        category = a.get("category", "uncategorized")
-        overview = a.get("overview", "")
-
-        lines.append(f"### {emoji} {title}")
-        lines.append(f"*Category: {category}*")
+    if analyses:
+        lines.append("## Conversations")
         lines.append("")
-        lines.append(overview)
-        lines.append("")
+        for a in analyses:
+            emoji = a.get("emoji", "")
+            title = a.get("title", a["_stem"])
+            category = a.get("category", "uncategorized")
+            overview = a.get("overview", "")
 
-        key_facts = a.get("key_facts", [])
-        if key_facts:
-            lines.append("**Key facts:**")
-            for fact in key_facts:
-                lines.append(f"- {fact}")
+            lines.append(f"### {emoji} {title}")
+            lines.append(f"*Category: {category}*")
+            lines.append("")
+            lines.append(overview)
             lines.append("")
 
-        lines.append("---")
+            key_facts = a.get("key_facts", [])
+            if key_facts:
+                lines.append("**Key facts:**")
+                for fact in key_facts:
+                    lines.append(f"- {fact}")
+                lines.append("")
+
+            lines.append("---")
+            lines.append("")
+
+    # --- Speaking style feedback (only present when speech_coach.py was
+    # actually run against something that day — see load_day_speech_coaching)
+    if speech_coaching:
+        # Match each speech_coach entry back to its conversation title, if
+        # one exists, for a more readable label than the raw filename stem.
+        titles_by_stem = {a["_stem"]: a.get("title", a["_stem"]) for a in analyses}
+
+        lines.append("## Speaking Style Feedback")
         lines.append("")
+        for sc in speech_coaching:
+            label = titles_by_stem.get(sc["_stem"], sc["_stem"])
+            metrics = sc["metrics"]
+            feedback = sc["feedback"]
+            pace = metrics["pace"]
+            fillers = metrics["fillers"]
+
+            lines.append(f"### {label}")
+            lines.append(
+                f"*{pace['words_per_minute']} WPM, {pace['duration_seconds']}s"
+                + (f", {fillers['total_filler_count']} filler words" if fillers["total_filler_count"] else "")
+                + "*"
+            )
+            lines.append("")
+
+            if feedback.get("strengths"):
+                lines.append("**Strengths:**")
+                for s in feedback["strengths"]:
+                    lines.append(f"- {s}")
+                lines.append("")
+
+            if feedback.get("areas_to_improve"):
+                lines.append("**Areas to improve:**")
+                for area in feedback["areas_to_improve"]:
+                    lines.append(f"- {area['observation']}")
+                    lines.append(f"  - Example: \"{area['example']}\"")
+                    lines.append(f"  - Try instead: {area['suggestion']}")
+                lines.append("")
+
+            lines.append(f"**Pace:** {feedback.get('pace_feedback', '')}")
+            lines.append("")
+            lines.append(f"**Overall:** {feedback.get('overall_take', '')}")
+            lines.append("")
+            lines.append("---")
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -115,7 +185,12 @@ _CATEGORY_COLORS = {
 }
 
 
-def render_html(target_date: date, analyses: list[dict], things_link: Optional[str] = None) -> str:
+def render_html(
+    target_date: date,
+    analyses: list[dict],
+    things_link: Optional[str] = None,
+    speech_coaching: Optional[list[dict]] = None,
+) -> str:
     """
     Renders a clean, inline-styled HTML version of the digest. Inline styles
     throughout rather than a <style> block, since email clients (Gmail
@@ -128,6 +203,7 @@ def render_html(target_date: date, analyses: list[dict], things_link: Optional[s
     inside the email itself isn't possible anywhere, not just here.
     """
     esc = html.escape
+    speech_coaching = speech_coaching or []
 
     body_font = "font-family: -apple-system, Helvetica, Arial, sans-serif;"
 
@@ -141,14 +217,15 @@ def render_html(target_date: date, analyses: list[dict], things_link: Optional[s
         f'Daily Digest — {target_date.isoformat()}</h1>',
     ]
 
-    if not analyses:
+    if not analyses and not speech_coaching:
         parts.append('<p style="color: #636e72;">No conversations recorded today.</p>')
         parts.append("</div></body></html>")
         return "".join(parts)
 
-    parts.append(
-        f'<p style="color: #636e72; font-size: 14px;">{len(analyses)} conversation(s) recorded.</p>'
-    )
+    if analyses:
+        parts.append(
+            f'<p style="color: #636e72; font-size: 14px;">{len(analyses)} conversation(s) recorded.</p>'
+        )
 
     # --- Action items, rolled up first ---
     all_action_items = []
@@ -185,37 +262,91 @@ def render_html(target_date: date, analyses: list[dict], things_link: Optional[s
             )
 
     # --- Per-conversation detail ---
-    parts.append('<h2 style="font-size: 17px; margin-top: 28px;">Conversations</h2>')
-    for a in analyses:
-        emoji = a.get("emoji", "")
-        title = esc(a.get("title", a.get("_stem", "")))
-        category = a.get("category", "uncategorized")
-        color = _CATEGORY_COLORS.get(category, _CATEGORY_COLORS["other"])
-        overview = esc(a.get("overview", ""))
+    if analyses:
+        parts.append('<h2 style="font-size: 17px; margin-top: 28px;">Conversations</h2>')
+        for a in analyses:
+            emoji = a.get("emoji", "")
+            title = esc(a.get("title", a.get("_stem", "")))
+            category = a.get("category", "uncategorized")
+            color = _CATEGORY_COLORS.get(category, _CATEGORY_COLORS["other"])
+            overview = esc(a.get("overview", ""))
 
-        parts.append(
-            '<div style="border: 1px solid #dfe6e9; border-radius: 8px; padding: 14px 16px; '
-            'margin-bottom: 12px;">'
-        )
-        parts.append(
-            f'<div style="font-size: 16px; font-weight: 600;">{emoji} {title}</div>'
-        )
-        parts.append(
-            f'<span style="display: inline-block; background-color: {color}; color: #ffffff; '
-            f'font-size: 11px; padding: 2px 8px; border-radius: 10px; margin: 6px 0;">'
-            f"{esc(category)}</span>"
-        )
-        parts.append(f'<p style="font-size: 14px; line-height: 1.5;">{overview}</p>')
+            parts.append(
+                '<div style="border: 1px solid #dfe6e9; border-radius: 8px; padding: 14px 16px; '
+                'margin-bottom: 12px;">'
+            )
+            parts.append(
+                f'<div style="font-size: 16px; font-weight: 600;">{emoji} {title}</div>'
+            )
+            parts.append(
+                f'<span style="display: inline-block; background-color: {color}; color: #ffffff; '
+                f'font-size: 11px; padding: 2px 8px; border-radius: 10px; margin: 6px 0;">'
+                f"{esc(category)}</span>"
+            )
+            parts.append(f'<p style="font-size: 14px; line-height: 1.5;">{overview}</p>')
 
-        key_facts = a.get("key_facts", [])
-        if key_facts:
-            parts.append('<div style="font-size: 13px; margin-top: 8px;"><strong>Key facts:</strong></div>')
-            parts.append('<ul style="font-size: 13px; margin: 4px 0; padding-left: 20px;">')
-            for fact in key_facts:
-                parts.append(f"<li>{esc(fact)}</li>")
-            parts.append("</ul>")
+            key_facts = a.get("key_facts", [])
+            if key_facts:
+                parts.append('<div style="font-size: 13px; margin-top: 8px;"><strong>Key facts:</strong></div>')
+                parts.append('<ul style="font-size: 13px; margin: 4px 0; padding-left: 20px;">')
+                for fact in key_facts:
+                    parts.append(f"<li>{esc(fact)}</li>")
+                parts.append("</ul>")
 
-        parts.append("</div>")
+            parts.append("</div>")
+
+    # --- Speaking style feedback (only present when speech_coach.py was
+    # actually run against something that day — see load_day_speech_coaching)
+    if speech_coaching:
+        titles_by_stem = {a.get("_stem", ""): a.get("title", a.get("_stem", "")) for a in analyses}
+
+        parts.append('<h2 style="font-size: 17px; margin-top: 28px;">Speaking Style Feedback</h2>')
+        for sc in speech_coaching:
+            label = esc(titles_by_stem.get(sc.get("_stem", ""), sc.get("_stem", "")))
+            metrics = sc["metrics"]
+            feedback = sc["feedback"]
+            pace = metrics["pace"]
+            fillers = metrics["fillers"]
+
+            filler_note = f", {fillers['total_filler_count']} filler words" if fillers["total_filler_count"] else ""
+
+            parts.append(
+                '<div style="border: 1px solid #dfe6e9; border-radius: 8px; padding: 14px 16px; '
+                'margin-bottom: 12px;">'
+            )
+            parts.append(f'<div style="font-size: 16px; font-weight: 600;">{label}</div>')
+            parts.append(
+                f'<div style="font-size: 12px; color: #b2bec3; margin-bottom: 8px;">'
+                f"{pace['words_per_minute']} WPM, {pace['duration_seconds']}s{filler_note}</div>"
+            )
+
+            if feedback.get("strengths"):
+                parts.append('<div style="font-size: 13px;"><strong>Strengths:</strong></div>')
+                parts.append('<ul style="font-size: 13px; margin: 4px 0 10px; padding-left: 20px;">')
+                for s in feedback["strengths"]:
+                    parts.append(f"<li>{esc(s)}</li>")
+                parts.append("</ul>")
+
+            if feedback.get("areas_to_improve"):
+                parts.append('<div style="font-size: 13px;"><strong>Areas to improve:</strong></div>')
+                for area in feedback["areas_to_improve"]:
+                    parts.append(
+                        f'<div style="font-size: 13px; margin: 6px 0 10px;">'
+                        f"{esc(area['observation'])}<br>"
+                        f'<span style="color: #636e72;">Example: "{esc(area["example"])}"</span><br>'
+                        f'<span style="color: #00b894;">Try instead: {esc(area["suggestion"])}</span></div>'
+                    )
+
+            if feedback.get("pace_feedback"):
+                parts.append(
+                    f'<p style="font-size: 13px;"><strong>Pace:</strong> {esc(feedback["pace_feedback"])}</p>'
+                )
+            if feedback.get("overall_take"):
+                parts.append(
+                    f'<p style="font-size: 13px;"><strong>Overall:</strong> {esc(feedback["overall_take"])}</p>'
+                )
+
+            parts.append("</div>")
 
     parts.append("</div>")
     parts.append("</body></html>")
@@ -331,14 +462,17 @@ def main():
 
     config.ensure_dirs()
     analyses = load_day_analyses(target_date)
-    markdown = render_markdown(target_date, analyses)
+    speech_coaching = load_day_speech_coaching(target_date)
+    markdown = render_markdown(target_date, analyses, speech_coaching)
     things_link = integrations.build_things_link(analyses, target_date)
-    html_body = render_html(target_date, analyses, things_link)
+    html_body = render_html(target_date, analyses, things_link, speech_coaching)
 
     out_path = config.DIGESTS_DIR / f"{target_date.isoformat()}.md"
     out_path.write_text(markdown, encoding="utf-8")
 
     print(f"Found {len(analyses)} conversation(s) for {target_date.isoformat()}.")
+    if speech_coaching:
+        print(f"Found {len(speech_coaching)} speech coaching report(s) for {target_date.isoformat()}.")
     print(f"Wrote: {out_path}")
 
     try:
