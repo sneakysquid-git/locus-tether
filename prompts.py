@@ -24,7 +24,11 @@ SYSTEM_PROMPT = f"""You are analyzing a transcript of a real conversation or voi
   "category": "One of: {', '.join(CATEGORIES)}",
   "emoji": "A single emoji that represents the content",
   "action_items": [
-    {{"description": "A specific, actionable task mentioned or implied", "completed": false}}
+    {{
+      "description": "A specific, actionable task, commitment, or reminder",
+      "due_date": "A specific date/time mentioned for this item (e.g. 'Thursday', 'next Tuesday at 2pm'), or null if none was mentioned",
+      "completed": false
+    }}
   ],
   "key_facts": [
     "A specific fact, decision, name, date, or number worth remembering later"
@@ -33,6 +37,7 @@ SYSTEM_PROMPT = f"""You are analyzing a transcript of a real conversation or voi
 
 Rules:
 - Base everything strictly on the transcript. Do not invent details, names, or facts that are not present.
+- action_items includes not just literal to-dos, but also appointments, scheduled commitments, deadlines, and things the speaker asked to be reminded of — e.g. "dentist appointment next Tuesday" is an action item just as much as "call the insurance company" is. Don't only catch imperative-phrased tasks.
 - If there are no clear action items, return an empty list for action_items — do not force one.
 - If there are no standout facts worth remembering, return an empty list for key_facts.
 - title and overview must always be present and non-empty, even for casual or short conversations.

@@ -6,14 +6,26 @@
 # point at a DATA directory kept separate from this code repo (e.g.
 # /home/efranklin/omi-data). See README's "Directory layout on the Thor".
 #
-# Prerequisites on the Thor host before this will actually use the GPU/MPS:
+# Prerequisites on the Thor host before this will actually use the GPU:
 #   1. NVIDIA container runtime installed and set as the default runtime
 #      (usually already true on JetPack images, but confirm:
 #      `cat /etc/docker/daemon.json` should show "default-runtime": "nvidia").
-#   2. Host MPS control daemon running — see host-setup/enable-mps.sh.
-#   3. The inbox/processing/archive/transcripts/failed directories referenced
+#   2. The inbox/processing/archive/transcripts/failed directories referenced
 #      below should already exist on the host, or Docker will create them
 #      as root-owned, which is fine for a single-user box but worth knowing.
+#
+# ON MPS: this originally used CUDA MPS to cap GPU usage for this container,
+# leaving headroom for robotics work (see the GPU-partitioning discussion
+# early in this project). MPS was DISABLED after confirming, on real
+# hardware, that it causes Ollama's llama-server subprocess to hang
+# indefinitely during GPU discovery ("llama-server GPU discovery watchdog
+# timed out", repeating on every load attempt) — a real bug in how MPS
+# interacts with Thor's still-maturing driver stack, not a config mistake on
+# our end. Given this pipeline's actual GPU usage is bursty and brief
+# (Whisper + Ollama each run for seconds, not continuously), default CUDA
+# time-slicing without MPS is the right tradeoff here — contention with
+# robotics work should be rare and brief even without a hard cap. Revisit if
+# NVIDIA/Ollama ship a fix for this on a future JetPack release.
 
 services:
   omi-pipeline:
@@ -23,13 +35,13 @@ services:
     container_name: omi-pipeline
     restart: unless-stopped
     runtime: nvidia
-    # Ollama runs natively on the Thor host, not in a container (see the
-    # Phase 4 discussion — Ollama's own GPU backend selection needed a
-    # systemd-level env var fix that's simplest to apply on the host
-    # directly). network_mode: host lets this container reach it via plain
-    # "localhost:11434" rather than needing extra_hosts/host.docker.internal
-    # plumbing — reasonable on a single-device box like this where the
-    # container doesn't need network isolation from its own host anyway.
+    # Ollama runs natively on the Thor host, not in a container (its own GPU
+    # backend selection needed a systemd-level env var fix that's simplest
+    # to apply on the host directly — see README). network_mode: host lets
+    # this container reach it via plain "localhost:11434" rather than
+    # needing extra_hosts/host.docker.internal plumbing — reasonable on a
+    # single-device box like this where the container doesn't need network
+    # isolation from its own host anyway.
     network_mode: host
     environment:
       # --- Required for the NVIDIA container runtime hook to actually inject
@@ -43,18 +55,6 @@ services:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: all
 
-      # --- MPS client wiring ---
-      # Cap this container to 25% of the GPU's SMs, leaving the rest free.
-      # Raise/lower this once you've benchmarked actual transcription speed
-      # against how much headroom your robotics work needs. This is a soft
-      # cap, not a hard reservation — if nothing else is using the GPU,
-      # this container is NOT artificially throttled to 25% of total
-      # throughput; the cap only matters when something else is contending
-      # for the same SMs at the same time.
-      CUDA_MPS_ACTIVE_THREAD_PERCENTAGE: "25"
-      CUDA_MPS_PIPE_DIRECTORY: /tmp/nvidia-mps
-      CUDA_MPS_LOG_DIRECTORY: /tmp/nvidia-log
-
       # --- Pipeline config (see config.py for the full list) ---
       # Must match the /app/... mount points below, since config.py derives
       # inbox/processing/archive/transcripts/failed as subdirs of this.
@@ -63,12 +63,6 @@ services:
       OMI_WHISPER_DEVICE: cuda
       OMI_WHISPER_COMPUTE_TYPE: float16
     volumes:
-      # Host MPS directories, shared with the host daemon started by
-      # host-setup/enable-mps.sh — this container is a client of that daemon,
-      # not running its own.
-      - /tmp/nvidia-mps:/tmp/nvidia-mps
-      - /tmp/nvidia-log:/tmp/nvidia-log
-
       # Pipeline DATA directories on the host — ${OMI_DATA_DIR} here comes
       # from your .env file (see docker/.env.example) and should point at a
       # directory separate from this code repo, e.g. /home/efranklin/omi-data.
