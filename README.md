@@ -1,5 +1,15 @@
 # Omi → Jetson Thor: A Fully Local AI Memory Pipeline
 
+## What is an Omi?
+
+An Omi wearable is a small, orb-shaped AI device created by the tech startup Based Hardware. It functions as a hands-free, wearable AI companion and "second brain" designed to record, transcribe, and summarize your conversations and daily activities.
+
+Here are the key aspects of how it works and what it does:
+- How it is worn: The tiny device can be worn discreetly around the neck as a necklace or clipped to your clothing.
+- Key features: The wearable continuously listens to your voice and surroundings. The companion app (which runs on your phone or desktop) transcribes your conversations in real-time, generates summaries, highlights action items, and acts as a chat interface that remembers what you've heard or discussed.
+- AI integrations: It connects to other services to automate tasks, such as sending emails, drafting notes, translating languages, or saving information directly to Google Drive.
+- Privacy and Open Source: One of Omi's main selling points is its focus on data ownership. The device and software are completely open-source, allowing you to choose whether your data stays locally on your phone, is stored on your own self-hosted server, or goes to their secure cloud.
+
 ## What this project is
 
 This is a self-hosted replacement for the Omi wearable's normal cloud
