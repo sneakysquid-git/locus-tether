@@ -8,8 +8,13 @@ Flow per file:
   3. Move it into PROCESSING_DIR (so a crash mid-transcription doesn't leave
      it sitting in INBOX_DIR to be silently skipped or double-queued).
   4. Transcribe with faster-whisper.
-  5. On success: write transcript, move audio to ARCHIVE_DIR.
-     On failure: move audio to FAILED_DIR, log the exception, keep going.
+  5. On success: write transcript, run Phase 4 analysis (Ollama), move audio
+     to ARCHIVE_DIR. Analysis failure is a soft failure — logged, but the
+     transcript is kept and the file still archives normally, since a
+     successful transcription is valuable on its own even if the LLM
+     analysis step has trouble (Ollama down, etc.).
+     On transcription failure: move audio to FAILED_DIR, log the exception,
+     keep going.
 
 Run with:
     python watcher.py
@@ -25,6 +30,7 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+import analyzer
 import config
 import transcribe
 
@@ -121,6 +127,12 @@ def process_one(path: Path) -> None:
         log.exception("Transcription failed for %s", processing_path.name)
         shutil.move(str(processing_path), str(config.FAILED_DIR / processing_path.name))
         return
+
+    # Analysis is a soft-failure step: analyze_and_write() catches its own
+    # errors and logs them rather than raising, so a bad/unreachable Ollama
+    # call here never undoes the transcription success above.
+    log.info("Analyzing: %s", processing_path.name)
+    analyzer.analyze_and_write(result["text"], stem)
 
     shutil.move(str(processing_path), str(config.ARCHIVE_DIR / processing_path.name))
     log.info("Done: %s", processing_path.name)

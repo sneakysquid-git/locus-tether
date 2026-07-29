@@ -23,7 +23,26 @@ services:
     container_name: omi-pipeline
     restart: unless-stopped
     runtime: nvidia
+    # Ollama runs natively on the Thor host, not in a container (see the
+    # Phase 4 discussion — Ollama's own GPU backend selection needed a
+    # systemd-level env var fix that's simplest to apply on the host
+    # directly). network_mode: host lets this container reach it via plain
+    # "localhost:11434" rather than needing extra_hosts/host.docker.internal
+    # plumbing — reasonable on a single-device box like this where the
+    # container doesn't need network isolation from its own host anyway.
+    network_mode: host
     environment:
+      # --- Required for the NVIDIA container runtime hook to actually inject
+      # GPU devices — confirmed by testing on this exact hardware that
+      # `runtime: nvidia` alone was NOT sufficient; without these two vars
+      # explicitly set, the hook injects nothing at all (no /dev/nvidia*
+      # nodes show up in the container, even though the host has them and
+      # the CSV mount-spec files are correctly configured). Thor doesn't
+      # support the more common `--gpus=all` shorthand, which normally sets
+      # these implicitly — so on this hardware they must be set by hand.
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: all
+
       # --- MPS client wiring ---
       # Cap this container to 25% of the GPU's SMs, leaving the rest free.
       # Raise/lower this once you've benchmarked actual transcription speed

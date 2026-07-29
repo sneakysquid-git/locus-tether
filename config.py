@@ -39,6 +39,18 @@ WHISPER_COMPUTE_TYPE = os.environ.get("OMI_WHISPER_COMPUTE_TYPE", "float16")
 WHISPER_LANGUAGE = os.environ.get("OMI_WHISPER_LANGUAGE")  # None = auto-detect
 WHISPER_VAD_FILTER = os.environ.get("OMI_WHISPER_VAD_FILTER", "true").lower() == "true"
 
+# --- Ollama (Phase 4: transcript -> structured analysis) -----------------
+# Ollama runs natively on the Thor host (not containerized), so the pipeline
+# container reaches it via the host's network — see docker-compose.yml's
+# network_mode: host, which is what makes "localhost" here actually resolve
+# to the host's Ollama server rather than the container's own loopback.
+OLLAMA_HOST = os.environ.get("OMI_OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OMI_OLLAMA_MODEL", "llama3.1:8b")
+# If analysis fails (Ollama down, bad JSON, etc.), should the pipeline still
+# keep the transcript? Yes, always — a transcription success is valuable on
+# its own; a failed analysis stage is a soft failure, not a reason to lose
+# the transcript or route the audio to FAILED_DIR.
+
 # --- Logging -------------------------------------------------------------
 LOG_LEVEL = os.environ.get("OMI_LOG_LEVEL", "INFO")
 LOG_FILE = Path(os.environ.get("OMI_LOG_FILE", str(BASE_DIR / "pipeline.log")))

@@ -3,37 +3,78 @@
 # Values below are confirmed against the real device (not placeholders):
 #   - L4T release: R39.2 / JetPack 7.2 (from `cat /etc/nv_tegra_release`)
 #   - Compute capability: 11.0 (from `nvidia-smi --query-gpu=compute_cap`),
-#     i.e. CMAKE_CUDA_ARCHITECTURES=110 — trust nvidia-smi on real hardware
-#     over secondary sources that reference sm_101 for Thor.
-#   - CUDA toolkit: 13.2, per community reports building on this exact
-#     hardware/L4T combo (dusty-nv/jetson-containers issue #1661).
+#     i.e. CMAKE_CUDA_ARCHITECTURES=110.
+#   - CUDA toolkit: 13.2, per community reports on this exact hardware/L4T
+#     combo (dusty-nv/jetson-containers issue #1661).
 #
-# If the exact `l4t-jetpack:r39.2.0` tag below 404s on NGC (JetPack 7.2 is
-# very recent, the matching container tag may lag the OS release slightly),
-# check https://catalog.ngc.nvidia.com/orgs/nvidia/containers/l4t-jetpack/tags
-# for the closest available r39.x tag.
+# IMPORTANT: as of this build, NGC has NOT published an l4t-jetpack tag for
+# L4T R39.x (verified directly against the registry API — the latest
+# available tag is r36.4.0). This Dockerfile uses plain ubuntu:24.04 as the
+# base instead.
 #
-# Known gotcha (per jetson-containers issue #1661, same hardware/L4T combo):
-# some Jetson-specific pip indexes (e.g. pypi.jetson-ai-lab.io) are missing
-# common packages like numpy/huggingface_hub for the cu132/sbsa target,
-# causing installs to fail with "not found in package registry." This
-# Dockerfile installs from standard PyPI by default, but if the base image's
-# pip config redirects elsewhere and installs start failing that way, add
-# `--extra-index-url https://pypi.org/simple` to the affected pip3 commands.
+# An earlier version of this Dockerfile relied on the NVIDIA container
+# runtime's CSV mount mechanism to inject the host's CUDA toolkit at
+# container start. That does NOT reliably apply during `docker build` —
+# BuildKit manages its own build workers and doesn't consistently honor
+# `--runtime nvidia` / the daemon's default-runtime setting the way a plain
+# `docker run` does (this is what caused the cmake CUDA-detection failure).
+# Since compiling CUDA code (nvcc) doesn't need a live GPU anyway, this
+# version installs the CUDA toolkit directly via apt instead — self-
+# contained, no dependency on build-time runtime behavior.
 #
-# This container is meant to run with the NVIDIA container runtime. On this
-# machine that's already the Docker default (`default-runtime: nvidia` in
-# /etc/docker/daemon.json), so no extra flag is strictly needed, but
-# docker-compose.yml sets `runtime: nvidia` explicitly anyway — Thor does NOT
-# support the more common `--gpus=all` flag/option, only `--runtime=nvidia`.
+# A second wrong turn along the way: the *generic* NVIDIA CUDA repo
+# (developer.download.nvidia.com/.../ubuntu2404/arm64/) is for SBSA — server-
+# class ARM64 with discrete GPUs (Grace-Hopper, Graviton, etc.) — and does
+# NOT publish cuda-toolkit packages for Jetson/Tegra at all, only some shared
+# packages like cuDNN (which is why that part appeared to work while the
+# toolkit silently didn't exist there). The real source, confirmed by
+# checking the actual host's /etc/apt/sources.list.d/nvidia-l4t-apt-source.list,
+# is repo.download.nvidia.com/jetson/common — a completely different repo,
+# trusted via the jetson-ota-public key rather than the generic cuda-keyring
+# package. Both are used below.
+#
+# This container still needs `--runtime nvidia` (not `--gpus=all`, which
+# Thor doesn't support) at RUN time, to actually access the GPU — that part
+# was never the problem, only the build-time toolkit availability was.
 
-FROM nvcr.io/nvidia/l4t-jetpack:r39.2.0
+FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV CUDA_ARCH=110
+# History of the CUDA-architecture flag for this build, in case it needs
+# revisiting on a future CTranslate2/CMake version:
+#   1st attempt: -DCMAKE_CUDA_ARCHITECTURES=110 — wrong variable name for
+#      this project entirely; CTranslate2 doesn't use CMake's native CUDA
+#      language variable, so this was silently ignored.
+#   2nd attempt: -DCUDA_ARCH_LIST=11.0 — the right variable name (fed into
+#      the legacy FindCUDA-based cuda_select_nvcc_arch_flags() macro), but
+#      that macro (bundled with CMake 3.28) has a hardcoded, fixed table of
+#      recognized GPU architecture names/numbers that simply doesn't include
+#      Thor's compute capability (11.0 / sm_110) — it's newer than that
+#      table. No amount of reformatting the number fixes this; it's not a
+#      formatting problem, the entry just isn't there.
+#   Final fix: skip that macro's lookup entirely. The RUN block below
+#   sed-patches CTranslate2's CMakeLists.txt to hardcode the correct
+#   -gencode flags for sm_110 directly, rather than asking CMake to resolve
+#   them from a table that predates this hardware.
+
+# --- Install CUDA 13.2 toolkit + cuDNN from the real Jetson (L4T) repo ------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates wget gnupg \
+    && wget -qO /etc/apt/trusted.gpg.d/jetson-ota-public.asc \
+        https://repo.download.nvidia.com/jetson/jetson-ota-public.asc \
+    && echo "deb https://repo.download.nvidia.com/jetson/common r39.2 main" \
+        > /etc/apt/sources.list.d/nvidia-l4t-apt-source.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        cuda-toolkit-13-2 \
+        libcudnn9-dev-cuda-13 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH=/usr/local/cuda/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:${LD_LIBRARY_PATH}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake git curl wget \
+    build-essential cmake git curl \
     python3 python3-pip python3-dev \
     ffmpeg \
     libopenblas-dev \
@@ -47,33 +88,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /opt/build
 RUN git clone --recursive https://github.com/OpenNMT/CTranslate2.git ctranslate2 \
     && cd ctranslate2 \
+    && sed -i 's/cuda_select_nvcc_arch_flags(ARCH_FLAGS \${CUDA_ARCH_LIST})/set(ARCH_FLAGS "-gencode;arch=compute_110,code=sm_110")/' CMakeLists.txt \
     && mkdir build && cd build \
     && cmake -DCMAKE_BUILD_TYPE=Release \
              -DWITH_CUDA=ON \
              -DWITH_CUDNN=ON \
-             -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} \
              -DWITH_MKL=OFF \
              -DWITH_OPENBLAS=ON \
+             -DOPENMP_RUNTIME=COMP \
              .. \
     && make -j"$(nproc)" \
     && make install \
     && ldconfig \
     && cd /opt/build/ctranslate2/python \
-    && pip3 install --no-cache-dir -r install_requirements.txt \
+    && pip3 install --break-system-packages --no-cache-dir -r install_requirements.txt \
     && python3 setup.py bdist_wheel \
-    && pip3 install --no-cache-dir dist/*.whl
+    && pip3 install --break-system-packages --no-cache-dir dist/*.whl
 
 # --- App dependencies -------------------------------------------------------
 WORKDIR /app
-COPY requirements-docker.txt .
+COPY docker/requirements-docker.txt .
 # --no-deps is deliberate: faster-whisper's normal install would happily pull
 # down the CPU-only PyPI ctranslate2 wheel and silently shadow the GPU build
 # we just compiled above. Its other dependencies are pinned explicitly in
 # requirements-docker.txt instead.
-RUN pip3 install --no-cache-dir --no-deps faster-whisper \
-    && pip3 install --no-cache-dir -r requirements-docker.txt
+RUN pip3 install --break-system-packages --no-cache-dir --no-deps faster-whisper \
+    && pip3 install --break-system-packages --no-cache-dir -r requirements-docker.txt
 
-COPY config.py transcribe.py watcher.py ./
+COPY config.py transcribe.py watcher.py prompts.py analyzer.py ./
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
