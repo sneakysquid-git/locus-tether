@@ -55,7 +55,10 @@ OLLAMA_MODEL = os.environ.get("OMI_OLLAMA_MODEL", "llama3.1:8b")
 LOG_LEVEL = os.environ.get("OMI_LOG_LEVEL", "INFO")
 LOG_FILE = Path(os.environ.get("OMI_LOG_FILE", str(BASE_DIR / "pipeline.log")))
 
+# --- Digests (Phase 5) ---------------------------------------------------
+DIGESTS_DIR = Path(os.environ.get("OMI_DIGESTS_DIR", str(BASE_DIR / "digests")))
+
 
 def ensure_dirs() -> None:
-    for d in (INBOX_DIR, PROCESSING_DIR, ARCHIVE_DIR, TRANSCRIPTS_DIR, FAILED_DIR):
+    for d in (INBOX_DIR, PROCESSING_DIR, ARCHIVE_DIR, TRANSCRIPTS_DIR, FAILED_DIR, DIGESTS_DIR):
         d.mkdir(parents=True, exist_ok=True)
