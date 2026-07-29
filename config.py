@@ -5,6 +5,33 @@ Override any of these via environment variables of the same name.
 import os
 from pathlib import Path
 
+
+def _load_dotenv_if_present(path: Path) -> None:
+    """
+    Tiny, dependency-free .env-style loader. Only sets a variable if it isn't
+    already present in the environment — so a real env var (e.g. set by
+    systemd, or exported in your shell) always takes precedence over this
+    file. Silently does nothing if the file doesn't exist.
+
+    Used for .env.digest specifically: SMTP credentials should never be
+    committed to git, and this lets the same untracked local file work
+    whether digest.py is run manually, via systemd, or via cron, without
+    needing separate wiring for each.
+    """
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+_load_dotenv_if_present(Path(__file__).resolve().parent / ".env.digest")
+
 # --- Directories -------------------------------------------------------
 # INBOX_DIR: where Syncthing drops new audio files synced from the phone.
 # PROCESSING_DIR: files move here while being transcribed (avoids double-processing
@@ -57,6 +84,19 @@ LOG_FILE = Path(os.environ.get("OMI_LOG_FILE", str(BASE_DIR / "pipeline.log")))
 
 # --- Digests (Phase 5) ---------------------------------------------------
 DIGESTS_DIR = Path(os.environ.get("OMI_DIGESTS_DIR", str(BASE_DIR / "digests")))
+
+# --- Digest email delivery (optional) -------------------------------------
+# All of these come from .env.digest (see .env.digest.example), which is
+# git-ignored — never commit real SMTP credentials. If DIGEST_EMAIL_ENABLED
+# isn't set to "true", digest.py just writes the markdown file as before and
+# skips email entirely; nothing here is required to use the digest at all.
+DIGEST_EMAIL_ENABLED = os.environ.get("OMI_DIGEST_EMAIL_ENABLED", "false").lower() == "true"
+DIGEST_SMTP_HOST = os.environ.get("OMI_DIGEST_SMTP_HOST", "")
+DIGEST_SMTP_PORT = int(os.environ.get("OMI_DIGEST_SMTP_PORT", "587"))
+DIGEST_SMTP_USER = os.environ.get("OMI_DIGEST_SMTP_USER", "")
+DIGEST_SMTP_PASSWORD = os.environ.get("OMI_DIGEST_SMTP_PASSWORD", "")
+DIGEST_EMAIL_FROM = os.environ.get("OMI_DIGEST_EMAIL_FROM", "")
+DIGEST_EMAIL_TO = os.environ.get("OMI_DIGEST_EMAIL_TO", "")
 
 
 def ensure_dirs() -> None:
