@@ -99,6 +99,17 @@ def build_things_link(analyses: list[dict], reference_date: date) -> Optional[st
     Returns a things:///add-json?... URL for all of the day's action items,
     or None if there are no action items at all (no point in a link that
     would add nothing).
+
+    TODO (known issue, revisit later): confirmed in real testing that only
+    ONE item ends up imported into Things even when this builds a JSON array
+    with multiple to-do objects. Likely causes to check: Things may need
+    each item as a separate top-level array element with a different
+    structure than what we're sending, a URL-length/encoding truncation
+    somewhere between here and Things actually parsing it, or the
+    x-callback-url scheme silently dropping all but the first item on
+    malformed input rather than erroring. Test by shrinking the payload to
+    exactly 2 known-simple items and inspecting the raw decoded JSON Things
+    receives, rather than guessing further.
     """
     items = build_things_items(analyses, reference_date)
     if not items:

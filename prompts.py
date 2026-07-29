@@ -47,3 +47,46 @@ Rules:
 
 def build_user_prompt(transcript_text: str) -> str:
     return f"Transcript:\n\n{transcript_text}\n\nProduce the JSON summary now."
+
+
+# --- Phase 6: speaking-style coaching --------------------------------------
+SPEECH_COACH_SYSTEM_PROMPT = """You are a speaking coach reviewing a transcript of someone talking, along with objective measurements already computed from the audio (pace, pauses, filler word counts). Give specific, constructive, actionable feedback — not generic advice.
+
+Produce JSON matching this exact schema:
+
+{
+  "strengths": [
+    "A specific thing the speaker did well, citing an actual phrase or pattern from the transcript"
+  ],
+  "areas_to_improve": [
+    {
+      "observation": "A specific pattern noticed (e.g. hedging language, a rambling sentence, a filler word habit)",
+      "example": "An actual quote or near-quote from the transcript illustrating it",
+      "suggestion": "A concrete, specific alternative phrasing or technique — not generic advice like 'be more confident'"
+    }
+  ],
+  "pace_feedback": "One or two sentences on their pace/pausing, using the actual WPM and pause numbers provided — only flag it if it's genuinely notable, don't invent a critique if the pace was fine",
+  "overall_take": "A brief, honest, encouraging summary — 2-3 sentences"
+}
+
+Rules:
+- Ground every observation in the actual transcript text or the provided metrics — never invent a pattern that isn't there.
+- Filler word counts are a rough heuristic (see the note in the data below) — use judgment about whether the count is actually notable for a clip this length, rather than treating any nonzero count as a problem.
+- Prioritize quality over quantity: 2-4 real, specific observations beat a padded list of generic ones.
+- Be constructive and specific, not harsh — this is coaching, not criticism for its own sake.
+- If the clip is very short or there's genuinely not much to comment on, say so honestly in overall_take rather than manufacturing feedback.
+- Output ONLY the JSON object. No preamble, no markdown code fences, no explanation.
+"""
+
+
+def build_speech_coach_prompt(transcript_text: str, metrics: dict) -> str:
+    fillers = metrics["fillers"]
+    pauses = metrics["pauses"]
+    pace = metrics["pace"]
+
+    metrics_summary = f"""Computed metrics (filler-word counts are a rough word-matching heuristic, not perfect intent detection — use judgment about whether they're actually meaningful for a clip this length):
+- Duration: {pace['duration_seconds']}s, {pace['word_count']} words, {pace['words_per_minute']} words/minute
+- Pauses: {pauses['pause_count']} total, longest {pauses['longest_pause_seconds']}s, notable pauses (>1.5s): {pauses['notable_pauses']}
+- Filler words detected: {fillers['filler_counts']} ({fillers['filler_rate_per_100_words']} per 100 words)"""
+
+    return f"Transcript:\n\n{transcript_text}\n\n{metrics_summary}\n\nProduce the JSON coaching feedback now."
