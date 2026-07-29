@@ -1,0 +1,13 @@
+[Unit]
+Description=Run the Omi daily digest every evening
+
+[Timer]
+# 8pm daily. Adjust to whenever makes sense for you — after most of a
+# typical day's recordings would already be transcribed/analyzed.
+OnCalendar=*-*-* 20:00:00
+# If the Thor was off/asleep at 8pm, run it as soon as it's back up rather
+# than silently skipping that day.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
