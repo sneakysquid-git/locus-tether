@@ -17,12 +17,13 @@ Run with:
     python3 webapp.py
 or as a persistent service — see webapp.service.
 """
-from datetime import date
+from datetime import date, timedelta
 
 from flask import Flask, abort, jsonify, request
 
 import config
 import data_store
+import integrations
 import todo_state
 
 app = Flask(__name__)
@@ -89,26 +90,63 @@ def _condensed_feedback(sc: dict) -> dict:
     }
 
 
-# --- API: Today (brief) ----------------------------------------------------
+# --- API: Today (brief, but with real value beyond just a to-do list) -----
 
 @app.route("/api/today")
 def api_today():
     today = date.today()
+    tomorrow = today + timedelta(days=1)
     analyses = data_store.load_day_analyses(today)
     speech_coaching = data_store.load_day_speech_coaching(today)
 
-    all_action_items = []
+    conversations = [
+        {
+            "stem": a.get("_stem", ""),
+            "title": a.get("title", a.get("_stem", "")),
+            "emoji": a.get("emoji", ""),
+            "category": a.get("category", "uncategorized"),
+        }
+        for a in analyses
+    ]
+
+    due_soon = []
+    action_items = []
+    key_facts = []
+
     for a in analyses:
+        source_title = a.get("title", a.get("_stem", ""))
         for item in _serialize_action_items(a):
-            item["source_title"] = a.get("title", a.get("_stem", ""))
-            all_action_items.append(item)
+            item["source_title"] = source_title
+            parsed = integrations.parse_relative_date(item.get("due_date"), today)
+            if parsed in (today, tomorrow) and not item["completed"]:
+                due_soon.append(item)
+            else:
+                action_items.append(item)
+        for fact in a.get("key_facts", []):
+            key_facts.append({"fact": fact, "source_title": source_title})
+
+    speech_teasers = []
+    for sc in speech_coaching:
+        stem = sc.get("_stem", "")
+        matching_analysis = data_store.load_analysis_by_stem(stem)
+        title = matching_analysis.get("title", stem) if matching_analysis else stem
+        speech_teasers.append(
+            {
+                "stem": stem,
+                "title": title,
+                "overall_take_preview": sc["feedback"].get("overall_take", "")[:140],
+            }
+        )
 
     return jsonify(
         {
             "date": today.isoformat(),
             "conversation_count": len(analyses),
-            "speech_coaching_count": len(speech_coaching),
-            "action_items": all_action_items,
+            "conversations": conversations,
+            "due_soon": due_soon,
+            "action_items": action_items,
+            "key_facts": key_facts,
+            "speech_coaching": speech_teasers,
         }
     )
 
@@ -290,12 +328,45 @@ async function renderToday() {
   const data = await (await fetch('/api/today')).json();
 
   let html = `<p style="color:#8b949e;font-size:14px;">
-    ${data.conversation_count} conversation(s) today` +
-    (data.speech_coaching_count ? `, ${data.speech_coaching_count} speaking-style report(s)` : '') +
-    `</p>`;
+    ${data.conversation_count} conversation(s) today</p>`;
 
+  if (!data.conversation_count && !data.action_items.length && !data.due_soon.length) {
+    html += '<p class="empty">Nothing recorded yet today. Pull up the Conversations or To-Dos tabs for older history.</p>';
+    document.getElementById('content').innerHTML = html;
+    return;
+  }
+
+  // --- Due soon: pulled out from the general list since "due tomorrow"
+  // deserves more attention than "no deadline at all". ---
+  if (data.due_soon.length) {
+    html += '<h2 style="font-size:16px;">Due soon</h2>';
+    data.due_soon.forEach(item => {
+      html += `<div class="todo-row" style="border-left:3px solid #ff9662;padding-left:8px;"
+        data-todo-id="${esc(item.id)}">
+        <input type="checkbox" ${item.completed ? 'checked' : ''}
+          onclick="toggleTodo('${item.id}', ${item.completed})">
+        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}
+        <span class="due">(due: ${esc(item.due_date)})</span>
+        <span class="source-label"> — ${esc(item.source_title)}</span></span>
+      </div>`;
+    });
+  }
+
+  // --- Today's conversations: compact, tappable rows into full detail ---
+  if (data.conversations.length) {
+    html += '<h2 style="font-size:16px;margin-top:20px;">Conversations today</h2>';
+    data.conversations.forEach(c => {
+      const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
+      html += `<div class="list-row" style="padding:10px 14px;" onclick="goDetail('conversations', '${esc(c.stem)}')">
+        <span style="font-weight:600;">${c.emoji || ''} ${esc(c.title)}</span>
+        <span class="badge" style="background:${color};margin-left:8px;">${esc(c.category)}</span>
+      </div>`;
+    });
+  }
+
+  // --- Remaining action items (due-soon ones already shown above) ---
   if (data.action_items.length) {
-    html += '<h2 style="font-size:16px;">Action items</h2>';
+    html += '<h2 style="font-size:16px;margin-top:20px;">Action items</h2>';
     data.action_items.forEach(item => {
       const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
       html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
@@ -305,8 +376,26 @@ async function renderToday() {
         <span class="source-label"> — ${esc(item.source_title)}</span></span>
       </div>`;
     });
-  } else {
-    html += '<p class="empty">Nothing recorded yet today. Pull up the Conversations or To-Dos tabs for older history.</p>';
+  }
+
+  // --- Key facts rollup across today's conversations ---
+  if (data.key_facts.length) {
+    html += '<h2 style="font-size:16px;margin-top:20px;">Key facts</h2><ul style="font-size:14px;padding-left:20px;">';
+    data.key_facts.forEach(kf => {
+      html += `<li>${esc(kf.fact)} <span class="source-label">— ${esc(kf.source_title)}</span></li>`;
+    });
+    html += '</ul>';
+  }
+
+  // --- Speaking style teasers: one line + tap-through to full detail ---
+  if (data.speech_coaching.length) {
+    html += '<h2 style="font-size:16px;margin-top:20px;">Speaking Style Feedback</h2>';
+    data.speech_coaching.forEach(sc => {
+      html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
+        <div style="font-weight:600;">${esc(sc.title)}</div>
+        <p style="font-size:13px;color:#8b949e;margin:4px 0 0;">${esc(sc.overall_take_preview)}</p>
+      </div>`;
+    });
   }
 
   document.getElementById('content').innerHTML = html;
