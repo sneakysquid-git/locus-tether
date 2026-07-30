@@ -4,7 +4,6 @@
 
 An Omi wearable is a small, orb-shaped AI device created by the tech startup Based Hardware. It functions as a hands-free, wearable AI companion and "second brain" designed to record, transcribe, and summarize your conversations and daily activities.
 
-Here are the key aspects of how it works and what it does:
 - How it is worn: The tiny device can be worn discreetly around the neck as a necklace or clipped to your clothing.
 - Key features: The wearable continuously listens to your voice and surroundings. The companion app (which runs on your phone or desktop) transcribes your conversations in real-time, generates summaries, highlights action items, and acts as a chat interface that remembers what you've heard or discussed.
 - AI integrations: It connects to other services to automate tasks, such as sending emails, drafting notes, translating languages, or saving information directly to Google Drive.
@@ -15,249 +14,299 @@ Here are the key aspects of how it works and what it does:
 This is a self-hosted replacement for the Omi wearable's normal cloud
 pipeline. Omi's official app streams your audio to Omi's servers, where a
 cloud LLM turns it into summaries, to-do lists, and searchable notes. This
-project gets the same *value* — automatic transcription and structured
-summaries of conversations and voice memos — without any of that audio or
-text ever leaving your own hardware.
+project gets the same *value* — automatic transcription, structured
+summaries, speaking-style coaching, and an always-current dashboard of your
+conversations — without any of that audio or text ever leaving your own
+hardware.
 
 Everything runs on a single NVIDIA Jetson Thor: the speech-to-text model,
-the language model that summarizes it, and the code that ties it together.
-No cloud API calls, no third-party servers, nothing billed per-request.
+the language model that summarizes it, and the code that ties it all
+together. No cloud API calls, no third-party servers, nothing billed
+per-request. Remote access (the web dashboard, SSH) goes over Tailscale — a
+private encrypted mesh network between your own devices, never the public
+internet.
 
-## Architecture at a glance
+**GitLab project:** `gl-demo-ultimate-efranklin/thor-training`
+**Known issues** are tracked as real GitLab issues (see the Known Issues
+section below) rather than just code comments, going forward.
+
+## System architecture (how it actually runs)
 
 ```mermaid
-flowchart TD
-    subgraph P0["Phase 0 — Capture Discovery"]
-        A1[Omi wearable records audio over Bluetooth]
-        A2[Phone app saves the audio file locally]
-        A1 --> A2
+flowchart TB
+    Omi(["Omi wearable + phone app"])
+
+    subgraph Thor["Jetson Thor"]
+        direction TB
+        Inbox[("inbox/")]
+        Transcribe["Transcription<br/>watcher.py + faster-whisper<br/>CTranslate2 · CUDA"]
+        Transcripts[("transcripts/")]
+        Analysis["Analysis<br/>analyzer.py + Ollama<br/>llama3.1:8b · GPU"]
+        Digest["digest.py<br/>(daily email + PDF + Things 3)"]
+        Webapp["webapp.py<br/>Flask · tailscale serve"]
+        TodoState[("todo_state.json")]
+
+        Inbox --> Transcribe
+        Transcribe --> Transcripts
+        Transcripts --> Analysis
+        Analysis --> Transcripts
+        Transcripts --> Digest
+        Transcripts --> Webapp
+        Webapp <--> TodoState
     end
 
-    subgraph P1["Phase 1 — Local Sync"]
-        B1["Syncthing on phone (Send Only)"]
-        B2["Syncthing on Thor (Receive Only)"]
-        B1 -->|"Home Wi-Fi only — no cloud relay"| B2
-    end
+    EmailInbox[("Email inbox")]
+    You(["You — phone or browser, anywhere"])
 
-    subgraph P2["Phase 2 — Folder Watcher"]
-        C1["watcher.py notices new file in inbox/"]
-        C2["Waits for the file to stop changing"]
-        C3["Moves it into processing/"]
-        C1 --> C2 --> C3
-    end
+    Omi -.->|"Syncthing — planned"| Thor
+    Thor -->|SMTP| EmailInbox
+    Thor <-->|"tailscale serve"| You
 
-    subgraph P3["Phase 3 — Transcription"]
-        D1["faster-whisper (CTranslate2)"]
-        D2["GPU-accelerated via CUDA"]
-        D3["Writes transcript: .json + .txt"]
-        D1 --> D2 --> D3
-    end
+    classDef done fill:#1b4332,stroke:#0d2818,color:#ffffff,stroke-width:2px
+    classDef planned fill:#1d3557,stroke:#0d1b2a,color:#ffffff,stroke-width:2px
+    classDef extern fill:#495057,stroke:#212529,color:#ffffff,stroke-width:2px
 
-    subgraph P4["Phase 4 — AI Analysis"]
-        E1["analyzer.py sends transcript to Ollama"]
-        E2["Local LLM (llama3.1:8b) generates structured JSON"]
-        E3["title, overview, category, action_items, key_facts"]
-        E1 --> E2 --> E3
-    end
-
-    subgraph P5["Phase 5 — Reporting"]
-        F1["Daily digest job"]
-        F2["Email summary or note export"]
-        F1 --> F2
-    end
-
-    A2 --> B1
-    B2 --> C1
-    C3 --> D1
-    D3 --> E1
-    E3 --> F1
-
-    classDef doneNode fill:#1b4332,stroke:#0d2818,color:#ffffff,stroke-width:2px
-    classDef blockedNode fill:#1d3557,stroke:#0d1b2a,color:#ffffff,stroke-width:2px
-    classDef todoNode fill:#495057,stroke:#212529,color:#ffffff,stroke-width:2px
-
-    class A1,A2,B1,B2 blockedNode
-    class C1,C2,C3,D1,D2,D3,E1,E2,E3 doneNode
-    class F1,F2 todoNode
-
-    style P0 fill:#a8dadc,stroke:#1d3557,color:#0d1b2a,stroke-width:3px
-    style P1 fill:#a8dadc,stroke:#1d3557,color:#0d1b2a,stroke-width:3px
-    style P2 fill:#95d5b2,stroke:#1b4332,color:#0d2818,stroke-width:3px
-    style P3 fill:#95d5b2,stroke:#1b4332,color:#0d2818,stroke-width:3px
-    style P4 fill:#95d5b2,stroke:#1b4332,color:#0d2818,stroke-width:3px
-    style P5 fill:#ced4da,stroke:#495057,color:#212529,stroke-width:3px
+    class Omi planned
+    class Inbox,Transcribe,Transcripts,Analysis,Digest,Webapp,TodoState done
+    class You,EmailInbox extern
 ```
 
-🟢 **Green (Phases 2-4): built, tested, working end-to-end** on real hardware
-with real recordings — including getting past several hardware-specific bugs
-unique to being early adopters of very new NVIDIA silicon (see each phase's
-notes below).
+🟢 **Dark green: built, tested, working end-to-end** on real hardware with
+real recordings — including getting past several hardware-specific bugs
+unique to being early adopters of very new NVIDIA silicon (see the
+phase-by-phase notes below).
 
-🔵 **Blue (Phases 0-1): designed and documented, blocked on hardware** — the
-Omi wearable hasn't shipped yet, so these steps haven't been executed for
-real, only planned. Everything downstream of them has been validated using
+🔵 **Dark blue: designed and documented, blocked on hardware** — the Omi
+wearable hasn't shipped yet, so syncing hasn't been executed for real, only
+planned. Everything downstream of it has been validated using
 manually-recorded test audio dropped straight into the inbox folder, standing
 in for what Syncthing will eventually deliver automatically.
 
-⚫ **Gray (Phase 5): not started yet.**
+Two things worth calling out about this design:
+
+- **Nothing in this diagram is triggered manually except the "You" node.**
+  Syncthing reacts to filesystem events (not a schedule), the watcher reacts
+  to new files instantly, and the digest fires on a daily timer. The webapp's
+  refresh button is the *only* on-demand action anywhere in the system — it
+  doesn't send anything anywhere, it just asks "what do you currently have."
+- **The webapp is reachable from anywhere without exposing anything
+  publicly.** `webapp.py` binds to `127.0.0.1` only; `tailscale serve` makes
+  it reachable over your private Tailscale network (the same one SSH
+  already uses), with real HTTPS, and zero public internet exposure.
 
 ## Key terms and technologies used here
 
-**Omi** — the open-source AI wearable this project is built around. Normally
-pairs with a phone app that streams audio to Omi's cloud for processing;
-here we intercept before that cloud step.
+**Omi** — the open-source AI wearable this project is built around (MIT
+licensed). Normally pairs with a phone app that streams audio to Omi's
+cloud for processing; here we intercept before that cloud step.
 
 **Syncthing** — an open-source file-synchronization tool that syncs folders
 directly between devices on the same network, with no cloud server in the
-middle. Used here to move audio files from the phone to the Thor
-automatically whenever both are on home Wi-Fi.
+middle. Event-driven (reacts to file changes instantly), not scheduled.
 
 **Jetson Thor** — the physical NVIDIA computer everything in this project
-runs on. It's a compact "edge AI" device: a real GPU and a lot of unified
-memory (128GB), built for running AI workloads locally instead of in a data
-center.
+runs on. A compact "edge AI" device: a real GPU and 128GB of unified memory,
+built for running AI workloads locally instead of in a data center.
 
 **CUDA** — NVIDIA's platform for running general-purpose computation on the
-GPU rather than the CPU. Both the transcription and analysis stages depend
-on CUDA to actually be fast; without it, everything here would still work,
-just 10-20x slower.
+GPU rather than the CPU. Both transcription and analysis depend on it for
+speed; without it, everything here would still work, just 10-20x slower.
 
-**cuDNN** — NVIDIA's library of GPU-accelerated building blocks specifically
-for neural networks (the layers/operations models like Whisper and LLMs are
-built from). Sits on top of CUDA.
+**cuDNN** — NVIDIA's library of GPU-accelerated neural network building
+blocks, built on top of CUDA.
 
-**CTranslate2** — an open-source, high-performance engine for running
-Transformer-based AI models (the architecture behind Whisper, and most
-modern LLMs). We compiled this from source specifically for Thor's brand-new
-GPU architecture, since no prebuilt version existed yet anywhere.
+**CTranslate2** — a high-performance inference engine for Transformer
+models. Compiled from source specifically for Thor's brand-new GPU
+architecture, since no prebuilt version existed anywhere at build time.
 
-**faster-whisper** — a Python wrapper around CTranslate2 that runs OpenAI's
-Whisper speech-to-text model. "Faster" because CTranslate2's optimized
-engine is significantly quicker than OpenAI's original reference
-implementation, especially on a GPU.
+**faster-whisper** — a CTranslate2-based wrapper around OpenAI's Whisper
+speech-to-text model. "Faster" because CTranslate2's engine is
+significantly quicker than the original reference implementation.
 
-**Whisper** — OpenAI's speech-to-text (transcription) model. This is what
-actually converts your recorded voice into text.
+**Whisper** — OpenAI's speech-to-text model. Converts recorded voice into
+text.
 
-**VAD (Voice Activity Detection)** — a filtering step that trims out
-silence before transcription, so the model isn't wasting time processing
-dead air.
-
-**Docker / container** — a way of packaging software together with its
-exact dependencies (specific library versions, etc.) so it runs the same
-way regardless of what else is installed on the machine. Used here so this
-pipeline's Python/CUDA environment can never collide with whatever your
-separate robotics projects need on the same Thor.
+**Docker / container** — packaging software with its exact dependencies so
+it runs consistently regardless of what else is on the machine. Keeps this
+pipeline's Python/CUDA environment from ever colliding with separate
+robotics projects on the same Thor.
 
 **NVIDIA Container Runtime** — the plumbing that lets a Docker container
-actually see and use the GPU. Getting this working correctly on Thor
-specifically required setting `NVIDIA_VISIBLE_DEVICES` and
-`NVIDIA_DRIVER_CAPABILITIES` explicitly — undocumented for this hardware at
-the time we built this, discovered through direct testing.
+see and use the GPU. Required `NVIDIA_VISIBLE_DEVICES` and
+`NVIDIA_DRIVER_CAPABILITIES` set explicitly on this hardware — undocumented
+at the time, found through direct testing.
 
-**MPS (Multi-Process Service)** — NVIDIA's mechanism for letting multiple
-processes share one GPU with a soft resource cap, instead of one process
-hogging it entirely. We tried this specifically to leave GPU headroom for
-robotics work, but confirmed on real hardware that it causes Ollama's model
-runner to hang indefinitely — a genuine bug in how MPS interacts with
-Thor's still-maturing driver stack. It's disabled; see Phase 4 below.
+**MPS (Multi-Process Service)** — NVIDIA's tool for sharing one GPU across
+multiple processes with a soft cap. Tried here to leave headroom for
+robotics work, then **deliberately disabled** after confirming it causes
+Ollama's model runner to hang indefinitely on this hardware — a real driver
+bug, not a config mistake. The pipeline now relies on default CUDA
+time-slicing instead, which is fine given how brief/bursty its actual GPU
+usage is.
 
-**Ollama** — an open-source tool that makes running large language models
-locally simple: pull a model by name, it handles serving it over a local
-API. This is what powers the analysis stage.
+**Ollama** — runs large language models locally, serving them over a local
+API. Needed a manual systemd override on this hardware to force GPU use —
+its install script didn't recognize this JetPack version and silently fell
+back to CPU otherwise.
 
-**LLM (Large Language Model)** — the AI model that reads a transcript and
-produces the structured summary (title, action items, etc.). We're running
-`llama3.1:8b` — an 8-billion-parameter open-weight model, small enough to
-run fast locally while still producing good structured output.
+**LLM (Large Language Model)** — the model producing structured summaries
+and coaching feedback. Currently `llama3.1:8b`.
 
-**watchdog** — the Python library used to detect new files appearing in a
-folder, without constantly polling — it's what makes `watcher.py` reactive
-rather than needing to check on a timer.
+**Flask** — a lightweight Python web framework, used for the on-demand
+dashboard (`webapp.py`). Chosen for minimal resource footprint — this
+project's "don't overburden the Thor" constraint, since it needs to coexist
+with separate, more GPU-intensive robotics work.
 
-**systemd** — Linux's standard service manager. Used to keep Ollama and the
-watcher running persistently and restart them automatically if they crash
-or the Thor reboots.
+**Tailscale** — a private mesh network (built on WireGuard) between your
+own authenticated devices. Used for both SSH and the web dashboard —
+reachable from anywhere with internet, never exposed to the public internet
+at all. `tailscale serve` specifically exposes a `localhost`-only web
+service to your tailnet with real HTTPS, without changing how that service
+binds at all.
+
+**WeasyPrint** — generates the digest's PDF attachment. Chosen over the
+more commonly-used `wkhtmltopdf` after directly testing both: wkhtmltopdf
+converted the digest's table-of-contents links into broken external file
+references, while WeasyPrint produced genuine, verified-working internal
+PDF navigation.
+
+**watchdog** — the Python library detecting new files in a folder
+instantly, without polling on a timer.
+
+**systemd** — Linux's service manager. Keeps Ollama, the watcher, the
+digest timer, and the webapp running persistently, restarting them
+automatically on crash or reboot.
+
+## Known issues
+
+Tracked as real GitLab issues going forward, not just code comments:
+
+- **[#1](https://gitlab.com/gl-demo-ultimate-efranklin/thor-training/-/issues/1)
+  — Things 3 export only imports one to-do instead of all items.** The
+  `things:///add-json` link builds a JSON array of every action item, but
+  only the first one ends up imported. Root cause not yet confirmed.
+- **[#2](https://gitlab.com/gl-demo-ultimate-efranklin/thor-training/-/issues/2)
+  — Mystery "•••" collapsed-content indicator** appearing mid-list in at
+  least one Gmail-rendered digest email. Message-size clipping and bad
+  source data have both been ruled out; root cause still unknown, needs
+  Gmail's raw "Show original" source to investigate further.
 
 ## Phase-by-phase: what each step is trying to accomplish
 
 ### Phase 0 — Find where the phone actually stores recordings
-**Goal:** confirm exactly where the Omi app (or a fork of it) writes raw
-audio files on the phone, and in what format — this determines everything
-downstream. **Status: blocked on hardware.** Investigation plan (using
-`adb`) is documented further down, ready to run the moment the wearable
+**Goal:** confirm exactly where the Omi app writes raw audio files on the
+phone, and in what format. **Status: blocked on hardware.** `adb`
+investigation plan is documented and ready to run the moment the wearable
 arrives.
 
-### Phase 1 — Get the audio from the phone to the Thor, automatically
-**Goal:** the moment you're home and both devices share Wi-Fi, audio files
-should move themselves from phone to Thor with zero manual action — no
-cables, no cloud upload, nothing to remember to do. **Status: blocked on
-hardware**, but the mechanism (Syncthing, one-directional Send-Only /
-Receive-Only folder pairing) is fully designed and just needs Phase 0's
-answer to know which folder to point at.
+### Phase 1 — Get audio from the phone to the Thor, automatically
+**Goal:** zero manual action, ever — audio should sync itself the moment
+both devices share a network. **Status: blocked on hardware**, mechanism
+(Syncthing, one-directional Send-Only/Receive-Only pairing) fully designed.
+Worth noting: Syncthing is event-driven, not scheduled — there's no
+"cadence" to configure, it reacts to new files continuously. Extending this
+over Tailscale (so sync works from anywhere, not just home Wi-Fi) is a
+natural next step, and — like everything else in this project — testable
+today with synthetic files rather than needing real hardware first.
 
 ### Phase 2 — Notice new audio and hand it off for processing
-**Goal:** a background process on the Thor that's always watching for new
-files, robust to partial/in-progress file transfers (so it never grabs a
-half-written file), and that survives crashes/reboots without losing track
-of work. **Status: done.** `watcher.py` handles all of this, running as a
-systemd-managed Docker container.
+**Goal:** a background process that's always watching, robust to
+in-progress file transfers, survives crashes/reboots. **Status: done.**
+`watcher.py`, running as a systemd-managed Docker container.
 
 ### Phase 3 — Turn audio into text
-**Goal:** accurate, fast, GPU-accelerated transcription, entirely local.
-**Status: done** — genuinely the hardest engineering lift in this whole
-project, since Thor's GPU architecture is new enough that no prebuilt
-software anywhere supported it yet. Getting here required compiling
-CTranslate2 from source, which meant: finding the actual correct CUDA
-toolkit repository for this hardware (NVIDIA's generic public repo doesn't
-carry it — only the Jetson-specific one does), working around a CMake
-architecture-lookup table that predates this GPU's existence entirely (fixed
-by patching the build to hardcode the correct compilation flags directly),
-and clearing a Python packaging policy (PEP 668) that blocks system-wide
-installs by default. All of that is documented inline in `docker/Dockerfile`
-for future reference.
+**Goal:** accurate, fast, GPU-accelerated, entirely local transcription.
+**Status: done** — the hardest engineering lift in this project, since
+Thor's GPU architecture was new enough that no prebuilt software anywhere
+supported it. Required: finding the correct CUDA repo for this hardware
+(NVIDIA's generic public repo doesn't carry it), patching around a CMake
+architecture-lookup table that predates this GPU's existence, and clearing
+a Python packaging policy (PEP 668). All documented inline in
+`docker/Dockerfile`.
 
 ### Phase 4 — Turn the transcript into something useful
-**Goal:** don't just keep a wall of raw text — extract a title, a short
-summary, a category, action items (including appointments and reminders,
-not just literal to-dos), and specific facts worth remembering, the same
-kind of value Omi's cloud AI would have produced. **Status: done.**
-`analyzer.py` sends each transcript to a local Ollama model with a prompt
-enforcing that exact structure, using Ollama's JSON-mode output to guarantee
-valid, parseable results. Getting *this* working on Thor also took real
-troubleshooting: Ollama's install script didn't recognize this JetPack
-version and silently fell back to CPU-only, requiring a manual systemd
-override to force the correct GPU backend; and MPS (see glossary above) had
-to be disabled entirely after it was confirmed to hang Ollama's GPU
-discovery process indefinitely.
+**Goal:** title, summary, category, action items (including appointments
+and reminders, with due dates parsed where mentioned), and key facts —
+matching the value Omi's cloud AI would produce. **Status: done.**
+`analyzer.py` + Ollama, using JSON-mode output for reliably structured
+results. Getting Ollama onto the GPU on this hardware needed a manual
+systemd override; MPS had to be disabled entirely after it was found to
+break Ollama's GPU discovery.
 
 ### Phase 5 — Surface it without having to go looking
-**Goal:** a daily digest — email, or an exported note — so you see what got
-captured without manually opening files. **Status: not started.**
+**Goal:** a daily digest that's actually pleasant to read, not just a data
+dump. **Status: done**, and grew well beyond the original scope:
+- HTML email with visual checkboxes and color-coded categories (plain-text
+  fallback included for non-HTML clients)
+- A genuinely clickable table of contents **in the attached PDF**
+  (WeasyPrint) — the email body's own jump-links are included as a bonus
+  but not relied on, since in-email anchor navigation is
+  well-documented as unreliable across clients (Gmail included)
+- **Things 3 export** as a separate HTML attachment, not an inline button —
+  Gmail and Proton Mail both strip `href`s using non-standard URL schemes
+  from inline links, a client-side sanitization behavior, not something
+  fixable in the email itself. Opening a downloaded attachment sidesteps it
+  entirely, since it renders outside any webmail's live sanitizer.
+- Optional SMTP email delivery, credentials kept in a git-ignored
+  `.env.digest` file, never committed
+- A "Speaking Style Feedback" section (see Phase 6) when coaching was run
+  that day — grouped by the conversation's own date, not whenever the
+  coaching script happened to be run
+
+### Phase 6 — Speaking style coaching
+**Goal:** pace, filler-word, and hedging-language feedback to help
+articulate more clearly — the kind of coaching a human speech coach might
+give, grounded in real transcript data. **Status: done.** Deliberately
+on-demand (`speech_coach.py`), not run automatically on every recording,
+since reviewing speaking style makes sense for a deliberate practice
+recording, not a casual to-do-list voice memo. Combines:
+- **Free, deterministic metrics** (`speech_metrics.py`): words-per-minute,
+  pause locations/durations, and filler-word frequency — all computed from
+  data Whisper already produces, no new dependencies or audio
+  re-processing
+- **LLM-based qualitative feedback**, grounded in those numbers — specific
+  strengths, areas to improve (each with an actual transcript quote and a
+  concrete alternative phrasing), pace commentary, and an overall take
+
+### Phase 7 — On-demand web dashboard
+**Goal:** view today's data from anywhere — not just at home, not waiting
+for the end-of-day email — with a simple refresh button, plus something
+email fundamentally can't do: **real, functioning checkboxes** that
+actually persist. **Status: done.** `webapp.py` (Flask) + `todo_state.py`
+(a small persisted overlay tracking which to-dos are checked off, kept
+separate from the read-only LLM output) + `tailscale serve` for remote
+access without any public exposure. Deliberately lightweight — this only
+reads existing JSON files off disk, no GPU/LLM work, negligible resource
+cost at rest, safe to run continuously alongside robotics work on the same
+device.
 
 ## Directory layout on the Thor
-
-Two separate locations, kept apart deliberately — code in one place, runtime
-data (audio, transcripts, logs) in another. Mixing them causes real problems
-later: Docker's build context would try to include gigabytes of audio if
-data lived inside the repo, and a `git status` full of audio files/transcripts
-is miserable to work with.
 
 ```
 /home/efranklin/
 ├── projects/
-│   └── thor-training/          <- CODE (this repo)
+│   └── thor-training/               <- CODE (this repo)
 │       ├── config.py
 │       ├── watcher.py
 │       ├── transcribe.py
 │       ├── analyzer.py
 │       ├── prompts.py
-│       ├── requirements.txt
+│       ├── integrations.py           <- Things 3 export, date parsing
+│       ├── digest.py
+│       ├── digest.service / .timer
+│       ├── speech_metrics.py         <- Phase 6: free deterministic metrics
+│       ├── speech_coach.py           <- Phase 6: on-demand LLM coaching
+│       ├── webapp.py                 <- Phase 7: on-demand dashboard
+│       ├── todo_state.py             <- Phase 7: persisted checkbox state
+│       ├── webapp.service
 │       ├── omi-watcher.service
-│       ├── .dockerignore
-│       ├── .env                <- created locally, not tracked in git
+│       ├── requirements.txt
+│       ├── .dockerignore / .gitignore
+│       ├── .env                      <- created locally, not tracked
+│       ├── .env.digest.example       <- tracked template, no real secrets
+│       ├── .env.digest               <- created locally, not tracked (SMTP creds)
 │       ├── analysis/
-│       │   └── analyze.py      <- manual CLI for testing prompt changes
+│       │   └── analyze.py            <- manual CLI for testing prompt changes
 │       └── docker/
 │           ├── Dockerfile
 │           ├── docker-compose.yml
@@ -265,56 +314,74 @@ is miserable to work with.
 │           ├── requirements-docker.txt
 │           └── .env.example
 │
-└── omi-data/                   <- DATA (not part of this repo, not in git)
-    ├── inbox/                  <- Syncthing will drop files here (Phase 1)
+└── omi-data/                         <- DATA (not part of this repo, not in git)
+    ├── inbox/                        <- Syncthing will drop files here (Phase 1)
     ├── processing/
     ├── archive/
-    ├── transcripts/            <- .json / .txt transcripts + .analysis.json
+    ├── transcripts/                  <- *.json, *.analysis.json, *.speech_coach.json
     ├── failed/
+    ├── digests/                      <- daily .md digests
+    ├── todo_state.json               <- Phase 7 checkbox state
     └── pipeline.log
 ```
 
 ## Setup on the Thor
 
 ```bash
-mkdir -p ~/omi-data/{inbox,processing,archive,transcripts,failed}
+mkdir -p ~/omi-data/{inbox,processing,archive,transcripts,failed,digests}
 cd ~/projects/thor-training
 cp docker/.env.example .env
 # edit .env: OMI_DATA_DIR=/home/efranklin/omi-data
 ```
 
-Ollama, running natively on the host (not containerized):
-
+**Ollama** (native, not containerized):
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.1:8b
 ```
+If `ollama ps` shows CPU instead of GPU after a test run, see the systemd
+override notes in `analyzer.py`'s comments — this hardware needs the GPU
+backend forced explicitly.
 
-If `ollama ps` after a test run shows `CPU` instead of `GPU`, this hardware
-needs the GPU backend forced explicitly — see `analyzer.py`'s comments and
-the systemd override under `/etc/systemd/system/ollama.service.d/`.
-
-Build and run the pipeline:
-
+**The transcription/analysis pipeline** (Docker):
 ```bash
 docker compose -f docker/docker-compose.yml up -d --build
-docker compose -f docker/docker-compose.yml logs -f
 ```
 
-Drop a test audio file into `~/omi-data/inbox/` and watch the logs —
-you should see `Transcribing:` → `Analyzing:` → `Done:` in sequence, with
-output landing in `~/omi-data/transcripts/`.
+**Digest email (optional)**:
+```bash
+cp .env.digest.example .env.digest
+chmod 600 .env.digest   # holds a real SMTP credential
+# fill in real values, then:
+pip3 install weasyprint --break-system-packages
+sudo cp digest.service digest.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now digest.timer
+```
 
-### Running as a persistent service (bare-metal, no Docker)
+**Speaking style coaching (on-demand)**:
+```bash
+python3 speech_coach.py ~/omi-data/transcripts/<stem>.json
+```
 
+**On-demand web dashboard**:
+```bash
+pip3 install flask --break-system-packages
+sudo cp webapp.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now webapp
+sudo tailscale serve --bg https / http://127.0.0.1:5001
+```
+
+**Persistent watcher (bare-metal alternative to Docker)**:
 ```bash
 sudo cp omi-watcher.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now omi-watcher
-sudo journalctl -u omi-watcher -f
 ```
 
 ## What's next
 
-Phase 5 (daily digest/reporting), then swapping the manually-dropped test
-audio for the real Phase 0/1 flow once the Omi wearable arrives.
+The two known issues above, whenever there's appetite to dig into them —
+otherwise the only real remaining work is Phase 0/1, which is squarely
+waiting on the Omi wearable to actually ship.
