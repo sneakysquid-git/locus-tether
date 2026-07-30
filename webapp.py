@@ -181,8 +181,43 @@ async function loadData() {
   if (data.speech_coaching && data.speech_coaching.length) {
     html += '<h2 style="font-size:16px;margin-top:20px;">Speaking Style Feedback</h2>';
     data.speech_coaching.forEach(sc => {
-      html += `<div class="card"><div style="font-weight:600;">${esc(sc._stem)}</div>
-        <p style="font-size:13px;">${esc(sc.feedback.overall_take || '')}</p></div>`;
+      const pace = sc.metrics.pace;
+      const fillers = sc.metrics.fillers;
+      const fillerNote = fillers.total_filler_count
+        ? `, ${fillers.total_filler_count} filler words` : '';
+      const fb = sc.feedback;
+
+      html += `<div class="card">
+        <div style="font-weight:600;">${esc(sc._stem)}</div>
+        <div style="font-size:12px;color:#b2bec3;margin-bottom:8px;">
+          ${pace.words_per_minute} WPM, ${pace.duration_seconds}s${fillerNote}
+        </div>`;
+
+      if (fb.strengths && fb.strengths.length) {
+        html += '<div style="font-size:13px;"><strong>Strengths:</strong></div><ul style="font-size:13px;margin:4px 0 10px;padding-left:20px;">';
+        fb.strengths.forEach(s => { html += `<li>${esc(s)}</li>`; });
+        html += '</ul>';
+      }
+
+      if (fb.areas_to_improve && fb.areas_to_improve.length) {
+        html += '<div style="font-size:13px;"><strong>Areas to improve:</strong></div>';
+        fb.areas_to_improve.forEach(area => {
+          html += `<div style="font-size:13px;margin:6px 0 10px;">
+            ${esc(area.observation)}<br>
+            <span style="color:#636e72;">Example: "${esc(area.example)}"</span><br>
+            <span style="color:#00b894;">Try instead: ${esc(area.suggestion)}</span>
+          </div>`;
+        });
+      }
+
+      if (fb.pace_feedback) {
+        html += `<p style="font-size:13px;"><strong>Pace:</strong> ${esc(fb.pace_feedback)}</p>`;
+      }
+      if (fb.overall_take) {
+        html += `<p style="font-size:13px;"><strong>Overall:</strong> ${esc(fb.overall_take)}</p>`;
+      }
+
+      html += '</div>';
     });
   }
 
