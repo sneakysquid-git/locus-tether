@@ -86,34 +86,40 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Omi — Today</title>
+<meta name="theme-color" content="#0d1117">
+<title>Omi Daily Digest</title>
 <style>
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 600px;
-         margin: 0 auto; padding: 16px; color: #2d3436; background: #ffffff; }
-  h1 { font-size: 20px; display: flex; justify-content: space-between; align-items: center; }
-  #refresh-btn { background: #2d3436; color: #fff; border: none; border-radius: 6px;
+         margin: 0 auto; padding: 16px; color: #e6edf3; background: #0d1117; }
+  h1 { font-size: 20px; display: flex; justify-content: space-between; align-items: center;
+       color: #e6edf3; }
+  h2 { color: #e6edf3; }
+  #refresh-btn { background: #1f6feb; color: #ffffff; border: none; border-radius: 6px;
                  padding: 8px 16px; font-size: 14px; }
-  #refresh-btn:active { opacity: 0.7; }
-  #last-updated { color: #b2bec3; font-size: 12px; margin-top: -8px; margin-bottom: 16px; }
-  .card { border: 1px solid #dfe6e9; border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
-  .badge { display: inline-block; color: #fff; font-size: 11px; padding: 2px 8px;
+  #refresh-btn:active { opacity: 0.75; }
+  #last-updated { color: #8b949e; font-size: 12px; margin-top: -8px; margin-bottom: 16px; }
+  .card { border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px;
+          margin-bottom: 12px; background: #161b22; }
+  .badge { display: inline-block; color: #ffffff; font-size: 11px; padding: 2px 8px;
            border-radius: 10px; margin: 6px 0; }
-  .todo-row { display: flex; align-items: baseline; padding: 6px 0; border-bottom: 1px solid #f1f2f6; }
+  .todo-row { display: flex; align-items: baseline; padding: 6px 0; border-bottom: 1px solid #21262d; }
   .todo-row input { margin-right: 10px; width: 18px; height: 18px; }
-  .todo-done { text-decoration: line-through; color: #b2bec3; }
-  .due { color: #e17055; font-size: 12px; }
-  .empty { color: #636e72; }
+  .todo-row .desc { color: #e6edf3; }
+  .todo-done { text-decoration: line-through; color: #6e7681; }
+  .due { color: #ff9662; font-size: 12px; }
+  .empty { color: #8b949e; }
+  .source-label { color: #6e7681; font-size: 12px; }
 </style>
 </head>
 <body>
-  <h1>Today <button id="refresh-btn" onclick="loadData()">&#8635; Refresh</button></h1>
+  <h1>Omi Daily Digest <button id="refresh-btn" onclick="loadData()">&#8635; Refresh</button></h1>
   <div id="last-updated"></div>
   <div id="content">Loading...</div>
 
 <script>
 const CATEGORY_COLORS = {
-  personal: "#6c5ce7", work: "#0984e3", education: "#00b894",
-  health: "#e17055", finance: "#00cec9", social: "#fd79a8", other: "#636e72"
+  personal: "#725ff4", work: "#0073e3", education: "#1b8569",
+  health: "#e02f00", finance: "#158482", social: "#e7006f", other: "#6b7580"
 };
 
 function esc(s) {
@@ -204,8 +210,8 @@ async function loadData() {
         fb.areas_to_improve.forEach(area => {
           html += `<div style="font-size:13px;margin:6px 0 10px;">
             ${esc(area.observation)}<br>
-            <span style="color:#636e72;">Example: "${esc(area.example)}"</span><br>
-            <span style="color:#00b894;">Try instead: ${esc(area.suggestion)}</span>
+            <span style="color:#8b949e;">Example: "${esc(area.example)}"</span><br>
+            <span style="color:#3fb950;">Try instead: ${esc(area.suggestion)}</span>
           </div>`;
         });
       }
