@@ -1,17 +1,17 @@
 """
-On-demand web dashboard: today's conversations, action items (with real,
-functioning checkboxes — unlike email, which can never do this), and
-speaking-style feedback if any was run today.
+On-demand web dashboard with four tabs:
+  - Today: brief summary + actionable to-do checklist for today specifically
+  - Conversations: condensed list across ALL history, drill into full detail
+  - To-Dos: flat list of every open action item across all history
+  - Feedback: condensed list of past speech-coaching sessions, drill into detail
 
-Deliberately lightweight: this reads existing JSON files off disk (the
-same ones digest.py already produces) and serves them — no GPU, no LLM
-calls, negligible resource footprint at rest, safe to leave running
-continuously alongside robotics work on the same Thor.
+Deliberately lightweight: reads existing JSON files off disk (via
+data_store.py) and serves them — no GPU, no LLM calls, negligible resource
+footprint at rest, safe to run continuously alongside robotics work.
 
 Meant to run on 127.0.0.1 ONLY (see webapp.service) and be exposed to your
 Tailscale network via `tailscale serve` — never bind this to 0.0.0.0 or a
-LAN-reachable interface directly; Tailscale's serve feature is what makes
-it reachable from anywhere without ever exposing it publicly.
+LAN-reachable interface directly.
 
 Run with:
     python3 webapp.py
@@ -19,66 +19,154 @@ or as a persistent service — see webapp.service.
 """
 from datetime import date
 
-from flask import Flask, jsonify, request
+from flask import Flask, abort, jsonify, request
 
 import config
-import digest
+import data_store
 import todo_state
 
 app = Flask(__name__)
 
 
-def _serialize_today() -> dict:
-    today = date.today()
-    analyses = digest.load_day_analyses(today)
-    speech_coaching = digest.load_day_speech_coaching(today)
+# --- Serialization helpers -------------------------------------------------
 
-    conversations = []
-    for a in analyses:
-        stem = a.get("_stem", "")
-        action_items = []
-        for i, item in enumerate(a.get("action_items", [])):
-            item_id = f"{stem}:{i}"
-            action_items.append(
-                {
-                    "id": item_id,
-                    "description": item["description"],
-                    "due_date": item.get("due_date"),
-                    "completed": todo_state.is_completed(item_id, item.get("completed", False)),
-                }
-            )
-        conversations.append(
+def _serialize_action_items(analysis: dict) -> list[dict]:
+    stem = analysis.get("_stem", "")
+    items = []
+    for i, item in enumerate(analysis.get("action_items", [])):
+        item_id = f"{stem}:{i}"
+        items.append(
             {
-                "stem": stem,
-                "title": a.get("title", stem),
-                "emoji": a.get("emoji", ""),
-                "category": a.get("category", "uncategorized"),
-                "overview": a.get("overview", ""),
-                "key_facts": a.get("key_facts", []),
-                "action_items": action_items,
+                "id": item_id,
+                "description": item["description"],
+                "due_date": item.get("due_date"),
+                "completed": todo_state.is_completed(item_id, item.get("completed", False)),
             }
         )
+    return items
 
+
+def _condensed_conversation(a: dict) -> dict:
+    overview = a.get("overview", "")
+    preview = overview if len(overview) <= 120 else overview[:117] + "..."
     return {
-        "date": today.isoformat(),
-        "conversations": conversations,
-        "speech_coaching": speech_coaching,
+        "stem": a.get("_stem", ""),
+        "date": a.get("_date", ""),
+        "title": a.get("title", a.get("_stem", "")),
+        "emoji": a.get("emoji", ""),
+        "category": a.get("category", "uncategorized"),
+        "preview": preview,
+        "action_item_count": len(a.get("action_items", [])),
     }
 
 
+def _full_conversation(a: dict) -> dict:
+    stem = a.get("_stem", "")
+    speech = data_store.load_speech_coaching_by_stem(stem)
+    return {
+        "stem": stem,
+        "date": a.get("_date", ""),
+        "title": a.get("title", stem),
+        "emoji": a.get("emoji", ""),
+        "category": a.get("category", "uncategorized"),
+        "overview": a.get("overview", ""),
+        "key_facts": a.get("key_facts", []),
+        "action_items": _serialize_action_items(a),
+        "speech_coaching": speech,
+    }
+
+
+def _condensed_feedback(sc: dict) -> dict:
+    analysis = data_store.load_analysis_by_stem(sc.get("_stem", ""))
+    title = analysis.get("title", sc["_stem"]) if analysis else sc.get("_stem", "")
+    pace = sc["metrics"]["pace"]
+    return {
+        "stem": sc.get("_stem", ""),
+        "date": sc.get("_date", ""),
+        "title": title,
+        "words_per_minute": pace["words_per_minute"],
+        "overall_take_preview": sc["feedback"].get("overall_take", "")[:100],
+    }
+
+
+# --- API: Today (brief) ----------------------------------------------------
+
 @app.route("/api/today")
 def api_today():
-    return jsonify(_serialize_today())
+    today = date.today()
+    analyses = data_store.load_day_analyses(today)
+    speech_coaching = data_store.load_day_speech_coaching(today)
+
+    all_action_items = []
+    for a in analyses:
+        for item in _serialize_action_items(a):
+            item["source_title"] = a.get("title", a.get("_stem", ""))
+            all_action_items.append(item)
+
+    return jsonify(
+        {
+            "date": today.isoformat(),
+            "conversation_count": len(analyses),
+            "speech_coaching_count": len(speech_coaching),
+            "action_items": all_action_items,
+        }
+    )
+
+
+# --- API: Conversations -----------------------------------------------------
+
+@app.route("/api/conversations")
+def api_conversations():
+    analyses = data_store.load_all_analyses()
+    return jsonify([_condensed_conversation(a) for a in analyses])
+
+
+@app.route("/api/conversations/<path:stem>")
+def api_conversation_detail(stem: str):
+    a = data_store.load_analysis_by_stem(stem)
+    if a is None:
+        abort(404)
+    return jsonify(_full_conversation(a))
+
+
+# --- API: To-Dos -------------------------------------------------------------
+
+@app.route("/api/todos")
+def api_todos():
+    analyses = data_store.load_all_analyses()
+    items = []
+    for a in analyses:
+        for item in _serialize_action_items(a):
+            item["source_stem"] = a.get("_stem", "")
+            item["source_title"] = a.get("title", a.get("_stem", ""))
+            item["date"] = a.get("_date", "")
+            items.append(item)
+    return jsonify(items)
 
 
 @app.route("/api/todo/<path:item_id>/toggle", methods=["POST"])
 def api_toggle_todo(item_id: str):
-    # current_default lets a fresh toggle correctly flip away from whatever
-    # the LLM originally set (usually false) even before any state file
-    # entry exists for this item yet.
     default = request.json.get("current_default", False) if request.is_json else False
     new_state = todo_state.toggle(item_id, default)
     return jsonify({"id": item_id, "completed": new_state})
+
+
+# --- API: Feedback -----------------------------------------------------------
+
+@app.route("/api/feedback")
+def api_feedback():
+    coaching = data_store.load_all_speech_coaching()
+    return jsonify([_condensed_feedback(sc) for sc in coaching])
+
+
+@app.route("/api/feedback/<path:stem>")
+def api_feedback_detail(stem: str):
+    sc = data_store.load_speech_coaching_by_stem(stem)
+    if sc is None:
+        abort(404)
+    analysis = data_store.load_analysis_by_stem(stem)
+    sc["title"] = analysis.get("title", stem) if analysis else stem
+    return jsonify(sc)
 
 
 _PAGE_TEMPLATE = """<!DOCTYPE html>
@@ -89,32 +177,52 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <meta name="theme-color" content="#0d1117">
 <title>Omi Daily Digest</title>
 <style>
+  * { box-sizing: border-box; }
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 600px;
-         margin: 0 auto; padding: 16px; color: #e6edf3; background: #0d1117; }
-  h1 { font-size: 20px; display: flex; justify-content: space-between; align-items: center;
-       color: #e6edf3; }
-  h2 { color: #e6edf3; }
+         margin: 0 auto; padding: 16px 16px 76px; color: #e6edf3; background: #0d1117; }
+  h1, h2 { color: #e6edf3; }
+  h1 { font-size: 20px; display: flex; justify-content: space-between; align-items: center; }
   #refresh-btn { background: #1f6feb; color: #ffffff; border: none; border-radius: 6px;
                  padding: 8px 16px; font-size: 14px; }
   #refresh-btn:active { opacity: 0.75; }
+  #back-btn { background: none; border: none; color: #58a6ff; font-size: 15px; padding: 6px 0;
+              display: flex; align-items: center; gap: 4px; }
   #last-updated { color: #8b949e; font-size: 12px; margin-top: -8px; margin-bottom: 16px; }
   .card { border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px;
           margin-bottom: 12px; background: #161b22; }
+  .list-row { border: 1px solid #30363d; border-radius: 8px; padding: 12px 14px;
+              margin-bottom: 8px; background: #161b22; }
+  .list-row:active { background: #1c2230; }
   .badge { display: inline-block; color: #ffffff; font-size: 11px; padding: 2px 8px;
            border-radius: 10px; margin: 6px 0; }
-  .todo-row { display: flex; align-items: baseline; padding: 6px 0; border-bottom: 1px solid #21262d; }
-  .todo-row input { margin-right: 10px; width: 18px; height: 18px; }
+  .todo-row { display: flex; align-items: baseline; padding: 8px 0; border-bottom: 1px solid #21262d; }
+  .todo-row input { margin-right: 10px; width: 18px; height: 18px; flex-shrink: 0; }
   .todo-row .desc { color: #e6edf3; }
   .todo-done { text-decoration: line-through; color: #6e7681; }
   .due { color: #ff9662; font-size: 12px; }
   .empty { color: #8b949e; }
   .source-label { color: #6e7681; font-size: 12px; }
+  .date-label { color: #6e7681; font-size: 11px; }
+
+  #tabbar { position: fixed; bottom: 0; left: 0; right: 0; background: #161b22;
+            border-top: 1px solid #30363d; display: flex; max-width: 600px; margin: 0 auto; }
+  #tabbar button { flex: 1; background: none; border: none; color: #6e7681; padding: 12px 4px;
+                   font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  #tabbar button.active { color: #58a6ff; }
+  #tabbar .icon { font-size: 18px; }
 </style>
 </head>
 <body>
-  <h1>Omi Daily Digest <button id="refresh-btn" onclick="loadData()">&#8635; Refresh</button></h1>
+  <div id="header"></div>
   <div id="last-updated"></div>
   <div id="content">Loading...</div>
+
+  <div id="tabbar">
+    <button data-tab="today" onclick="goTab('today')"><span class="icon">&#128197;</span>Today</button>
+    <button data-tab="conversations" onclick="goTab('conversations')"><span class="icon">&#128172;</span>Conversations</button>
+    <button data-tab="todos" onclick="goTab('todos')"><span class="icon">&#9745;</span>To-Dos</button>
+    <button data-tab="feedback" onclick="goTab('feedback')"><span class="icon">&#127908;</span>Feedback</button>
+  </div>
 
 <script>
 const CATEGORY_COLORS = {
@@ -124,8 +232,248 @@ const CATEGORY_COLORS = {
 
 function esc(s) {
   const d = document.createElement('div');
-  d.textContent = s;
+  d.textContent = s == null ? '' : s;
   return d.innerHTML;
+}
+
+// --- Simple client-side router using the History API, so both the
+// on-page back button AND the phone's actual back gesture behave correctly. ---
+function currentState() {
+  return history.state || { tab: 'today', detail: null };
+}
+
+function navigate(state, push) {
+  if (push) history.pushState(state, '', '#' + state.tab + (state.detail ? '/' + state.detail : ''));
+  render(state);
+}
+
+function goTab(tab) {
+  navigate({ tab, detail: null }, true);
+}
+
+function goDetail(tab, stem) {
+  navigate({ tab, detail: stem }, true);
+}
+
+window.addEventListener('popstate', () => render(currentState()));
+
+// --- Rendering ---
+
+async function render(state) {
+  document.querySelectorAll('#tabbar button').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === state.tab));
+
+  if (state.detail) {
+    if (state.tab === 'conversations') return renderConversationDetail(state.detail);
+    if (state.tab === 'feedback') return renderFeedbackDetail(state.detail);
+  }
+  if (state.tab === 'today') return renderToday();
+  if (state.tab === 'conversations') return renderConversationsList();
+  if (state.tab === 'todos') return renderTodos();
+  if (state.tab === 'feedback') return renderFeedbackList();
+}
+
+function setHeader(title, showRefresh, showBack) {
+  const backHtml = showBack
+    ? `<button id="back-btn" onclick="history.back()">&#8592; Back</button>` : '';
+  const refreshHtml = showRefresh
+    ? `<button id="refresh-btn" onclick="render(currentState())">&#8635; Refresh</button>` : '';
+  document.getElementById('header').innerHTML =
+    showBack ? backHtml : `<h1>${esc(title)} ${refreshHtml}</h1>`;
+  document.getElementById('last-updated').textContent = showRefresh
+    ? 'Last refreshed: ' + new Date().toLocaleTimeString() : '';
+}
+
+async function renderToday() {
+  setHeader('Omi Daily Digest', true, false);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const data = await (await fetch('/api/today')).json();
+
+  let html = `<p style="color:#8b949e;font-size:14px;">
+    ${data.conversation_count} conversation(s) today` +
+    (data.speech_coaching_count ? `, ${data.speech_coaching_count} speaking-style report(s)` : '') +
+    `</p>`;
+
+  if (data.action_items.length) {
+    html += '<h2 style="font-size:16px;">Action items</h2>';
+    data.action_items.forEach(item => {
+      const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
+      html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
+        <input type="checkbox" ${item.completed ? 'checked' : ''}
+          onclick="toggleTodo('${item.id}', ${item.completed})">
+        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}
+        <span class="source-label"> — ${esc(item.source_title)}</span></span>
+      </div>`;
+    });
+  } else {
+    html += '<p class="empty">Nothing recorded yet today. Pull up the Conversations or To-Dos tabs for older history.</p>';
+  }
+
+  document.getElementById('content').innerHTML = html;
+}
+
+async function renderConversationsList() {
+  setHeader('Conversations', true, false);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const data = await (await fetch('/api/conversations')).json();
+
+  if (!data.length) {
+    document.getElementById('content').innerHTML = '<p class="empty">No conversations yet.</p>';
+    return;
+  }
+
+  let html = '';
+  data.forEach(c => {
+    const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
+    html += `<div class="list-row" onclick="goDetail('conversations', '${esc(c.stem)}')">
+      <div style="display:flex;justify-content:space-between;">
+        <div style="font-weight:600;">${c.emoji || ''} ${esc(c.title)}</div>
+        <div class="date-label">${esc(c.date)}</div>
+      </div>
+      <span class="badge" style="background:${color};">${esc(c.category)}</span>
+      <p style="font-size:13px;color:#8b949e;margin:6px 0 0;">${esc(c.preview)}</p>
+    </div>`;
+  });
+  document.getElementById('content').innerHTML = html;
+}
+
+async function renderConversationDetail(stem) {
+  setHeader('', false, true);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const res = await fetch(`/api/conversations/${encodeURIComponent(stem)}`);
+  if (!res.ok) {
+    document.getElementById('content').innerHTML = '<p class="empty">Not found.</p>';
+    return;
+  }
+  const c = await res.json();
+  const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
+
+  let html = `<h1 style="margin-top:8px;">${c.emoji || ''} ${esc(c.title)}</h1>
+    <div class="date-label" style="margin-bottom:6px;">${esc(c.date)}</div>
+    <span class="badge" style="background:${color};">${esc(c.category)}</span>
+    <p style="font-size:15px;line-height:1.6;margin-top:12px;">${esc(c.overview)}</p>`;
+
+  if (c.key_facts.length) {
+    html += '<h2 style="font-size:16px;">Key facts</h2><ul style="font-size:14px;">';
+    c.key_facts.forEach(f => { html += `<li>${esc(f)}</li>`; });
+    html += '</ul>';
+  }
+
+  if (c.action_items.length) {
+    html += '<h2 style="font-size:16px;">Action items</h2>';
+    c.action_items.forEach(item => {
+      const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
+      html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
+        <input type="checkbox" ${item.completed ? 'checked' : ''}
+          onclick="toggleTodo('${item.id}', ${item.completed})">
+        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}</span>
+      </div>`;
+    });
+  }
+
+  if (c.speech_coaching) {
+    html += renderFeedbackCardHtml(c.speech_coaching, c.title);
+  }
+
+  document.getElementById('content').innerHTML = html;
+}
+
+async function renderTodos() {
+  setHeader('To-Dos', true, false);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const items = await (await fetch('/api/todos')).json();
+
+  if (!items.length) {
+    document.getElementById('content').innerHTML = '<p class="empty">No action items recorded.</p>';
+    return;
+  }
+
+  let html = '';
+  items.forEach(item => {
+    const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
+    html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
+      <input type="checkbox" ${item.completed ? 'checked' : ''}
+        onclick="toggleTodo('${item.id}', ${item.completed})">
+      <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}
+      <span class="source-label" onclick="event.stopPropagation(); goDetail('conversations','${esc(item.source_stem)}')">
+        — ${esc(item.source_title)} (${esc(item.date)})</span></span>
+    </div>`;
+  });
+  document.getElementById('content').innerHTML = html;
+}
+
+async function renderFeedbackList() {
+  setHeader('Speaking Style Feedback', true, false);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const data = await (await fetch('/api/feedback')).json();
+
+  if (!data.length) {
+    document.getElementById('content').innerHTML =
+      '<p class="empty">No speaking-style coaching run yet. Use speech_coach.py on a recording to generate one.</p>';
+    return;
+  }
+
+  let html = '';
+  data.forEach(sc => {
+    html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
+      <div style="display:flex;justify-content:space-between;">
+        <div style="font-weight:600;">${esc(sc.title)}</div>
+        <div class="date-label">${esc(sc.date)}</div>
+      </div>
+      <div style="font-size:12px;color:#8b949e;margin:4px 0;">${sc.words_per_minute} WPM</div>
+      <p style="font-size:13px;color:#8b949e;margin:0;">${esc(sc.overall_take_preview)}</p>
+    </div>`;
+  });
+  document.getElementById('content').innerHTML = html;
+}
+
+function renderFeedbackCardHtml(sc, title) {
+  const pace = sc.metrics.pace;
+  const fillers = sc.metrics.fillers;
+  const fillerNote = fillers.total_filler_count ? `, ${fillers.total_filler_count} filler words` : '';
+  const fb = sc.feedback;
+
+  let html = `<h2 style="font-size:16px;margin-top:24px;">Speaking Style Feedback</h2>
+    <div class="card">
+      <div style="font-size:12px;color:#8b949e;margin-bottom:8px;">
+        ${pace.words_per_minute} WPM, ${pace.duration_seconds}s${fillerNote}
+      </div>`;
+
+  if (fb.strengths && fb.strengths.length) {
+    html += '<div style="font-size:13px;"><strong>Strengths:</strong></div><ul style="font-size:13px;margin:4px 0 10px;padding-left:20px;">';
+    fb.strengths.forEach(s => { html += `<li>${esc(s)}</li>`; });
+    html += '</ul>';
+  }
+
+  if (fb.areas_to_improve && fb.areas_to_improve.length) {
+    html += '<div style="font-size:13px;"><strong>Areas to improve:</strong></div>';
+    fb.areas_to_improve.forEach(area => {
+      html += `<div style="font-size:13px;margin:6px 0 10px;">
+        ${esc(area.observation)}<br>
+        <span style="color:#8b949e;">Example: "${esc(area.example)}"</span><br>
+        <span style="color:#3fb950;">Try instead: ${esc(area.suggestion)}</span>
+      </div>`;
+    });
+  }
+
+  if (fb.pace_feedback) html += `<p style="font-size:13px;"><strong>Pace:</strong> ${esc(fb.pace_feedback)}</p>`;
+  if (fb.overall_take) html += `<p style="font-size:13px;"><strong>Overall:</strong> ${esc(fb.overall_take)}</p>`;
+
+  html += '</div>';
+  return html;
+}
+
+async function renderFeedbackDetail(stem) {
+  setHeader('', false, true);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const res = await fetch(`/api/feedback/${encodeURIComponent(stem)}`);
+  if (!res.ok) {
+    document.getElementById('content').innerHTML = '<p class="empty">Not found.</p>';
+    return;
+  }
+  const sc = await res.json();
+  document.getElementById('content').innerHTML =
+    `<h1 style="margin-top:8px;">${esc(sc.title)}</h1>` + renderFeedbackCardHtml(sc, sc.title);
 }
 
 async function toggleTodo(id, currentlyDone) {
@@ -135,102 +483,25 @@ async function toggleTodo(id, currentlyDone) {
     body: JSON.stringify({current_default: currentlyDone})
   });
   const data = await res.json();
-  const row = document.querySelector(`[data-todo-id="${CSS.escape(id)}"]`);
-  if (row) {
+  document.querySelectorAll(`[data-todo-id="${CSS.escape(id)}"]`).forEach(row => {
     row.querySelector('input').checked = data.completed;
     row.querySelector('.desc').classList.toggle('todo-done', data.completed);
-  }
-}
-
-async function loadData() {
-  document.getElementById('content').innerHTML = 'Loading...';
-  const res = await fetch('/api/today');
-  const data = await res.json();
-
-  document.getElementById('last-updated').textContent =
-    'Last refreshed: ' + new Date().toLocaleTimeString();
-
-  let html = '';
-
-  const allItems = [];
-  data.conversations.forEach(c => {
-    c.action_items.forEach(item => allItems.push({...item, source: c.title}));
   });
-
-  if (allItems.length) {
-    html += '<h2 style="font-size:16px;">Action items</h2>';
-    allItems.forEach(item => {
-      const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
-      html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
-        <input type="checkbox" ${item.completed ? 'checked' : ''}
-          onclick="toggleTodo('${item.id}', ${item.completed})">
-        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}
-        <span style="color:#b2bec3;font-size:12px;"> — ${esc(item.source)}</span></span>
-      </div>`;
-    });
-  }
-
-  if (!data.conversations.length) {
-    html += '<p class="empty">Nothing recorded yet today.</p>';
-  } else {
-    html += '<h2 style="font-size:16px;margin-top:20px;">Conversations</h2>';
-    data.conversations.forEach(c => {
-      const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
-      html += `<div class="card">
-        <div style="font-size:16px;font-weight:600;">${c.emoji || ''} ${esc(c.title)}</div>
-        <span class="badge" style="background:${color};">${esc(c.category)}</span>
-        <p style="font-size:14px;line-height:1.5;">${esc(c.overview)}</p>
-      </div>`;
-    });
-  }
-
-  if (data.speech_coaching && data.speech_coaching.length) {
-    html += '<h2 style="font-size:16px;margin-top:20px;">Speaking Style Feedback</h2>';
-    data.speech_coaching.forEach(sc => {
-      const pace = sc.metrics.pace;
-      const fillers = sc.metrics.fillers;
-      const fillerNote = fillers.total_filler_count
-        ? `, ${fillers.total_filler_count} filler words` : '';
-      const fb = sc.feedback;
-
-      html += `<div class="card">
-        <div style="font-weight:600;">${esc(sc._stem)}</div>
-        <div style="font-size:12px;color:#b2bec3;margin-bottom:8px;">
-          ${pace.words_per_minute} WPM, ${pace.duration_seconds}s${fillerNote}
-        </div>`;
-
-      if (fb.strengths && fb.strengths.length) {
-        html += '<div style="font-size:13px;"><strong>Strengths:</strong></div><ul style="font-size:13px;margin:4px 0 10px;padding-left:20px;">';
-        fb.strengths.forEach(s => { html += `<li>${esc(s)}</li>`; });
-        html += '</ul>';
-      }
-
-      if (fb.areas_to_improve && fb.areas_to_improve.length) {
-        html += '<div style="font-size:13px;"><strong>Areas to improve:</strong></div>';
-        fb.areas_to_improve.forEach(area => {
-          html += `<div style="font-size:13px;margin:6px 0 10px;">
-            ${esc(area.observation)}<br>
-            <span style="color:#8b949e;">Example: "${esc(area.example)}"</span><br>
-            <span style="color:#3fb950;">Try instead: ${esc(area.suggestion)}</span>
-          </div>`;
-        });
-      }
-
-      if (fb.pace_feedback) {
-        html += `<p style="font-size:13px;"><strong>Pace:</strong> ${esc(fb.pace_feedback)}</p>`;
-      }
-      if (fb.overall_take) {
-        html += `<p style="font-size:13px;"><strong>Overall:</strong> ${esc(fb.overall_take)}</p>`;
-      }
-
-      html += '</div>';
-    });
-  }
-
-  document.getElementById('content').innerHTML = html;
 }
 
-loadData();
+// Initial load: parse the URL hash if present (e.g. a bookmark or restored
+// session), rather than always defaulting to Today regardless of the URL.
+function parseInitialState() {
+  const hash = window.location.hash.replace(/^#/, '');
+  if (!hash) return { tab: 'today', detail: null };
+  const [tab, detail] = hash.split('/');
+  const validTabs = ['today', 'conversations', 'todos', 'feedback'];
+  if (!validTabs.includes(tab)) return { tab: 'today', detail: null };
+  return { tab, detail: detail || null };
+}
+
+if (!history.state) history.replaceState(parseInitialState(), '');
+render(currentState());
 </script>
 </body>
 </html>"""

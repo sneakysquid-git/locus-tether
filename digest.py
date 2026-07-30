@@ -24,66 +24,15 @@ from pathlib import Path
 from typing import Optional
 
 import config
+import data_store
 import integrations
 
 log = logging.getLogger("omi.digest")
 
-
-def load_day_analyses(target_date: date) -> list[dict]:
-    """
-    Returns every *.analysis.json in TRANSCRIPTS_DIR whose file modification
-    time falls on target_date (local time). Each dict includes the parsed
-    analysis content plus '_stem' (the recording's filename stem, useful for
-    cross-referencing back to the full transcript if needed).
-    """
-    results = []
-    for path in sorted(config.TRANSCRIPTS_DIR.glob("*.analysis.json")):
-        mtime = datetime.fromtimestamp(path.stat().st_mtime).date()
-        if mtime != target_date:
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue  # skip anything unreadable rather than crash the whole digest
-        data["_stem"] = path.stem.removesuffix(".analysis")
-        results.append(data)
-    return results
-
-
-def load_day_speech_coaching(target_date: date) -> list[dict]:
-    """
-    Returns every *.speech_coach.json in TRANSCRIPTS_DIR for target_date.
-    speech_coach.py is deliberately run on-demand (not automatically for
-    every recording — see its own docstring), so this list is often empty;
-    the digest only shows a "Speaking Style Feedback" section at all when
-    you've actually chosen to run it on something that day.
-
-    Grouped by the date of the MATCHING CONVERSATION (its .analysis.json),
-    not by whenever speech_coach.py itself happened to be run — you might
-    run coaching on a recording days after it happened, and the feedback
-    should stay attached to that conversation's own digest day, not get
-    split off into whatever day you got around to running the script.
-    Falls back to the speech_coach.json's own mtime only if no matching
-    analysis exists at all.
-    """
-    results = []
-    for path in sorted(config.TRANSCRIPTS_DIR.glob("*.speech_coach.json")):
-        stem = path.stem.removesuffix(".speech_coach")
-        analysis_path = config.TRANSCRIPTS_DIR / f"{stem}.analysis.json"
-        if analysis_path.exists():
-            relevant_date = datetime.fromtimestamp(analysis_path.stat().st_mtime).date()
-        else:
-            relevant_date = datetime.fromtimestamp(path.stat().st_mtime).date()
-
-        if relevant_date != target_date:
-            continue
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            continue
-        data["_stem"] = stem
-        results.append(data)
-    return results
+# Thin aliases — the real implementations now live in data_store.py (shared
+# with webapp.py, which needs the full history, not just one day).
+load_day_analyses = data_store.load_day_analyses
+load_day_speech_coaching = data_store.load_day_speech_coaching
 
 
 def render_markdown(target_date: date, analyses: list[dict], speech_coaching: Optional[list[dict]] = None) -> str:
