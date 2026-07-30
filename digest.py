@@ -17,6 +17,7 @@ import logging
 import smtplib
 import sys
 from datetime import date, datetime
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -241,6 +242,32 @@ def render_html(
             f'<p style="color: #636e72; font-size: 14px;">{len(analyses)} conversation(s) recorded.</p>'
         )
 
+    # --- Table of contents ---
+    # Jump-link TOCs are notoriously unreliable across email clients (Gmail
+    # in particular has a long history of not honoring in-page anchor
+    # navigation inside email bodies) — so this is included as a bonus for
+    # clients that do support it, not something to depend on. The SAME
+    # anchors are what make the attached PDF's table of contents genuinely
+    # clickable (PDF internal links are universally reliable, unlike email).
+    toc_entries = []
+    for i, a in enumerate(analyses):
+        toc_entries.append((f"conv-{i}", f"{a.get('emoji', '')} {a.get('title', a.get('_stem', ''))}"))
+    for i, sc in enumerate(speech_coaching):
+        titles_by_stem_early = {a.get("_stem", ""): a.get("title", a.get("_stem", "")) for a in analyses}
+        label = titles_by_stem_early.get(sc.get("_stem", ""), sc.get("_stem", ""))
+        toc_entries.append((f"speech-{i}", f"🎤 {label} (speaking style)"))
+
+    if len(toc_entries) > 1:  # a TOC for one thing isn't worth showing
+        parts.append('<h2 style="font-size: 15px; margin-top: 20px; color: #636e72;">Contents</h2>')
+        parts.append('<ul style="font-size: 13px; padding-left: 20px; margin: 4px 0;">')
+        for anchor_id, label in toc_entries:
+            parts.append(f'<li><a href="#{anchor_id}" style="color: #0984e3;">{esc(label)}</a></li>')
+        parts.append("</ul>")
+        parts.append(
+            '<p style="color: #b2bec3; font-size: 11px; margin-top: -4px;">'
+            "(Jump links above may not work in every email app — they always work in the attached PDF.)</p>"
+        )
+
     # --- Action items, rolled up first ---
     all_action_items = []
     for a in analyses:
@@ -278,7 +305,7 @@ def render_html(
     # --- Per-conversation detail ---
     if analyses:
         parts.append('<h2 style="font-size: 17px; margin-top: 28px;">Conversations</h2>')
-        for a in analyses:
+        for i, a in enumerate(analyses):
             emoji = a.get("emoji", "")
             title = esc(a.get("title", a.get("_stem", "")))
             category = a.get("category", "uncategorized")
@@ -286,7 +313,7 @@ def render_html(
             overview = esc(a.get("overview", ""))
 
             parts.append(
-                '<div style="border: 1px solid #dfe6e9; border-radius: 8px; padding: 14px 16px; '
+                f'<div id="conv-{i}" style="border: 1px solid #dfe6e9; border-radius: 8px; padding: 14px 16px; '
                 'margin-bottom: 12px;">'
             )
             parts.append(
@@ -315,7 +342,7 @@ def render_html(
         titles_by_stem = {a.get("_stem", ""): a.get("title", a.get("_stem", "")) for a in analyses}
 
         parts.append('<h2 style="font-size: 17px; margin-top: 28px;">Speaking Style Feedback</h2>')
-        for sc in speech_coaching:
+        for i, sc in enumerate(speech_coaching):
             label = esc(titles_by_stem.get(sc.get("_stem", ""), sc.get("_stem", "")))
             metrics = sc["metrics"]
             feedback = sc["feedback"]
@@ -325,7 +352,7 @@ def render_html(
             filler_note = f", {fillers['total_filler_count']} filler words" if fillers["total_filler_count"] else ""
 
             parts.append(
-                '<div style="border: 1px solid #dfe6e9; border-radius: 8px; padding: 14px 16px; '
+                f'<div id="speech-{i}" style="border: 1px solid #dfe6e9; border-radius: 8px; padding: 14px 16px; '
                 'margin-bottom: 12px;">'
             )
             parts.append(f'<div style="font-size: 16px; font-weight: 600;">{label}</div>')
@@ -365,6 +392,43 @@ def render_html(
     parts.append("</div>")
     parts.append("</body></html>")
     return "".join(parts)
+
+
+def render_pdf(html_body: str) -> Optional[bytes]:
+    """
+    Converts the digest's HTML into a PDF via WeasyPrint, reusing the exact
+    same anchors (id="conv-N", id="speech-N") that back the email's
+    (best-effort) jump-link TOC.
+
+    WeasyPrint specifically, not wkhtmltopdf: tested both directly against
+    this project's actual HTML output. wkhtmltopdf (at least the commonly
+    apt-packaged "unpatched Qt" build) converts same-page anchor links into
+    EXTERNAL file:// URI links pointing back at the temporary source HTML
+    file — which no longer exists once generation finishes, making every
+    link in the shipped PDF silently dead. WeasyPrint converts the same
+    anchors into genuine internal /Dest links, confirmed by inspecting the
+    actual PDF's link annotations and named-destination table (they resolve
+    to real page objects, not dangling references). This is the reliable
+    place for a working table of contents; the email body's own TOC is a
+    bonus for clients that happen to support in-page jump links, not
+    something to depend on (see the note next to it in render_html).
+
+    Returns None (rather than raising) if WeasyPrint isn't installed —
+    treated as a soft failure by the caller, same philosophy as a failed
+    email send: something being unavailable shouldn't take down the rest of
+    the digest.
+    """
+    try:
+        import weasyprint
+    except ImportError:
+        log.warning("weasyprint not installed — skipping PDF attachment. Install via: pip3 install weasyprint")
+        return None
+
+    try:
+        return weasyprint.HTML(string=html_body).write_pdf()
+    except Exception as e:
+        log.warning("PDF generation failed, skipping PDF attachment: %s", e)
+        return None
 
 
 def build_things_attachment(things_link: str) -> str:
@@ -447,6 +511,14 @@ def send_email(target_date: date, markdown: str, html_body: str, things_link: Op
             "Content-Disposition", "attachment", filename=f"add-to-things-{target_date.isoformat()}.html"
         )
         msg.attach(attachment)
+
+    pdf_bytes = render_pdf(html_body)
+    if pdf_bytes:
+        pdf_attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
+        pdf_attachment.add_header(
+            "Content-Disposition", "attachment", filename=f"digest-{target_date.isoformat()}.pdf"
+        )
+        msg.attach(pdf_attachment)
 
     # Port 465 = implicit TLS from the start of the connection.
     # Port 587 (and most others) = plain connection, then upgrade via STARTTLS.
