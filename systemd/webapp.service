@@ -4,12 +4,17 @@ After=network.target
 
 [Service]
 Type=simple
-# EDIT THIS to your actual username — systemd requires a concrete user here,
-# %h (used below) only expands to THAT user's home directory once set.
+# EDIT ALL THREE LINES BELOW to match your actual username/home directory.
+# Systemd's %h specifier looks like the obvious fix here, but does NOT work
+# for this: in system-level units (these), %h resolves to the SERVICE
+# MANAGER's home (root, i.e. /root) — not the User= account's home — despite
+# what the name suggests. That's documented systemd behavior, not a bug in
+# this file; %h only reliably reflects User= inside `systemctl --user`
+# instances, not system-wide ones like this.
 User=efranklin
-WorkingDirectory=%h/projects/thor-training/webapp
-Environment=OMI_PIPELINE_BASE=%h/omi-data
-ExecStart=/usr/bin/python3 %h/projects/thor-training/webapp/webapp.py
+WorkingDirectory=/home/efranklin/projects/thor-training/webapp
+Environment=OMI_PIPELINE_BASE=/home/efranklin/omi-data
+ExecStart=/usr/bin/python3 /home/efranklin/projects/thor-training/webapp/webapp.py
 Restart=on-failure
 RestartSec=5
 
