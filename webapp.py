@@ -90,6 +90,40 @@ def _condensed_feedback(sc: dict) -> dict:
     }
 
 
+def _all_open_action_items() -> list[dict]:
+    """
+    Every incomplete action item across ALL history, not just today (#10:
+    items should stay visible day after day until checked off, not silently
+    disappear once the day changes). Completed items are excluded here
+    entirely — they still show, crossed out, within that specific
+    conversation's own detail view (see _full_conversation), since that's
+    a historical record, not an active work list, and doesn't clutter
+    anything by keeping them visible there.
+    """
+    items = []
+    for a in data_store.load_all_analyses():
+        source_stem = a.get("_stem", "")
+        source_title = a.get("title", source_stem)
+        source_date = a.get("_date", "")
+        for item in _serialize_action_items(a):
+            if item["completed"]:
+                continue
+            item["source_stem"] = source_stem
+            item["source_title"] = source_title
+            item["date"] = source_date
+            items.append(item)
+    return items
+
+
+def _condensed_list(list_group: dict) -> dict:
+    open_items = [i for i in list_group["items"] if not todo_state.is_completed(i["id"], False)]
+    return {
+        "list_name": list_group["list_name"],
+        "item_count": len(open_items),
+        "most_recent_date": max((i["date"] for i in open_items), default=""),
+    }
+
+
 # --- API: Today (brief, but with real value beyond just a to-do list) -----
 
 @app.route("/api/today")
@@ -109,21 +143,36 @@ def api_today():
         for a in analyses
     ]
 
+    # Due-soon/action items now pull from ALL open history (#10), not just
+    # today's conversations — an old open item should keep surfacing, not
+    # vanish the moment the day changes.
     due_soon = []
     action_items = []
-    key_facts = []
+    for item in _all_open_action_items():
+        parsed = integrations.parse_relative_date(item.get("due_date"), today)
+        if parsed in (today, tomorrow):
+            due_soon.append(item)
+        else:
+            action_items.append(item)
 
+    # Key facts stay scoped to TODAY specifically — these are tied to a
+    # given conversation's context, not an open/closed work item.
+    key_facts = []
     for a in analyses:
         source_title = a.get("title", a.get("_stem", ""))
-        for item in _serialize_action_items(a):
-            item["source_title"] = source_title
-            parsed = integrations.parse_relative_date(item.get("due_date"), today)
-            if parsed in (today, tomorrow) and not item["completed"]:
-                due_soon.append(item)
-            else:
-                action_items.append(item)
         for fact in a.get("key_facts", []):
             key_facts.append({"fact": fact, "source_title": source_title})
+
+    # Lists teaser: which named lists got new items added today specifically.
+    lists_today_map = {}
+    for a in analyses:
+        for mlist in a.get("mentioned_lists", []):
+            name = mlist.get("list_name", "Misc").strip()
+            if mlist.get("items"):
+                key = name.lower()
+                lists_today_map.setdefault(key, {"list_name": name, "new_item_count": 0})
+                lists_today_map[key]["new_item_count"] += len(mlist["items"])
+    lists_today = list(lists_today_map.values())
 
     speech_teasers = []
     for sc in speech_coaching:
@@ -146,6 +195,7 @@ def api_today():
             "due_soon": due_soon,
             "action_items": action_items,
             "key_facts": key_facts,
+            "lists_today": lists_today,
             "speech_coaching": speech_teasers,
         }
     )
@@ -171,15 +221,7 @@ def api_conversation_detail(stem: str):
 
 @app.route("/api/todos")
 def api_todos():
-    analyses = data_store.load_all_analyses()
-    items = []
-    for a in analyses:
-        for item in _serialize_action_items(a):
-            item["source_stem"] = a.get("_stem", "")
-            item["source_title"] = a.get("title", a.get("_stem", ""))
-            item["date"] = a.get("_date", "")
-            items.append(item)
-    return jsonify(items)
+    return jsonify(_all_open_action_items())
 
 
 @app.route("/api/todo/<path:item_id>/toggle", methods=["POST"])
@@ -187,6 +229,28 @@ def api_toggle_todo(item_id: str):
     default = request.json.get("current_default", False) if request.is_json else False
     new_state = todo_state.toggle(item_id, default)
     return jsonify({"id": item_id, "completed": new_state})
+
+
+# --- API: Lists ----------------------------------------------------------
+
+@app.route("/api/lists")
+def api_lists():
+    condensed = [_condensed_list(g) for g in data_store.aggregate_lists()]
+    condensed = [c for c in condensed if c["item_count"] > 0]  # fully-checked-off lists just disappear
+    condensed.sort(key=lambda c: c["most_recent_date"], reverse=True)
+    return jsonify(condensed)
+
+
+@app.route("/api/lists/<path:list_name>")
+def api_list_detail(list_name: str):
+    matching = next(
+        (g for g in data_store.aggregate_lists() if g["list_name"].lower() == list_name.lower()),
+        None,
+    )
+    if matching is None:
+        abort(404)
+    open_items = [i for i in matching["items"] if not todo_state.is_completed(i["id"], False)]
+    return jsonify({"list_name": matching["list_name"], "items": open_items})
 
 
 # --- API: Feedback -----------------------------------------------------------
@@ -261,6 +325,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
     <button data-tab="conversations" onclick="goTab('conversations')"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>Conversations</button>
     <button data-tab="todos" onclick="goTab('todos')"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="8 12 11 15 16 9"/></svg></span>To-Dos</button>
     <button data-tab="feedback" onclick="goTab('feedback')"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></span>Feedback</button>
+    <button data-tab="lists" onclick="goTab('lists')"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span>Lists</button>
   </div>
 
 <script>
@@ -282,7 +347,8 @@ function currentState() {
 }
 
 function navigate(state, push) {
-  if (push) history.pushState(state, '', '#' + state.tab + (state.detail ? '/' + state.detail : ''));
+  const hashDetail = state.detail ? '/' + encodeURIComponent(state.detail) : '';
+  if (push) history.pushState(state, '', '#' + state.tab + hashDetail);
   render(state);
 }
 
@@ -305,11 +371,13 @@ async function render(state) {
   if (state.detail) {
     if (state.tab === 'conversations') return renderConversationDetail(state.detail);
     if (state.tab === 'feedback') return renderFeedbackDetail(state.detail);
+    if (state.tab === 'lists') return renderListDetail(state.detail);
   }
   if (state.tab === 'today') return renderToday();
   if (state.tab === 'conversations') return renderConversationsList();
   if (state.tab === 'todos') return renderTodos();
   if (state.tab === 'feedback') return renderFeedbackList();
+  if (state.tab === 'lists') return renderListsList();
 }
 
 function setHeader(title, showRefresh, showBack) {
@@ -395,6 +463,19 @@ async function renderToday() {
       html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
         <div style="font-weight:600;">${esc(sc.title)}</div>
         <p style="font-size:13px;color:#8b949e;margin:4px 0 0;">${esc(sc.overall_take_preview)}</p>
+      </div>`;
+    });
+  }
+
+  // --- Lists teaser: named lists that got new items added today ---
+  if (data.lists_today.length) {
+    html += '<h2 style="font-size:16px;margin-top:20px;">Added to lists today</h2>';
+    data.lists_today.forEach(l => {
+      html += `<div class="list-row" onclick="goDetail('lists', '${esc(l.list_name)}')">
+        <div style="display:flex;justify-content:space-between;">
+          <div style="font-weight:600;">${esc(l.list_name)}</div>
+          <div class="date-label">+${l.new_item_count}</div>
+        </div>
       </div>`;
     });
   }
@@ -566,6 +647,55 @@ async function renderFeedbackDetail(stem) {
     `<h1 style="margin-top:8px;">${esc(sc.title)}</h1>` + renderFeedbackCardHtml(sc, sc.title);
 }
 
+async function renderListsList() {
+  setHeader('Lists', true, false);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const data = await (await fetch('/api/lists')).json();
+
+  if (!data.length) {
+    document.getElementById('content').innerHTML =
+      '<p class="empty">Nothing yet. Mention wanting to check something out (a movie, restaurant, etc.) and it will show up here.</p>';
+    return;
+  }
+
+  let html = '';
+  data.forEach(l => {
+    html += `<div class="list-row" onclick="goDetail('lists', '${esc(l.list_name)}')">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;">
+        <div style="font-weight:600;">${esc(l.list_name)}</div>
+        <div class="date-label">${l.item_count} item${l.item_count === 1 ? '' : 's'}</div>
+      </div>
+    </div>`;
+  });
+  document.getElementById('content').innerHTML = html;
+}
+
+async function renderListDetail(listName) {
+  setHeader('', false, true);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const res = await fetch(`/api/lists/${encodeURIComponent(listName)}`);
+  if (!res.ok) {
+    document.getElementById('content').innerHTML = '<p class="empty">Not found.</p>';
+    return;
+  }
+  const data = await res.json();
+
+  let html = `<h1 style="margin-top:8px;">${esc(data.list_name)}</h1>`;
+  if (!data.items.length) {
+    html += '<p class="empty">Nothing left on this list.</p>';
+  } else {
+    data.items.forEach(item => {
+      html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
+        <input type="checkbox" onclick="toggleTodo('${item.id}', false)">
+        <span class="desc">${esc(item.text)}
+        <span class="source-label" onclick="event.stopPropagation(); goDetail('conversations','${esc(item.source_stem)}')">
+          — ${esc(item.source_title)} (${esc(item.date)})</span></span>
+      </div>`;
+    });
+  }
+  document.getElementById('content').innerHTML = html;
+}
+
 async function toggleTodo(id, currentlyDone) {
   const res = await fetch(`/api/todo/${encodeURIComponent(id)}/toggle`, {
     method: 'POST',
@@ -584,10 +714,10 @@ async function toggleTodo(id, currentlyDone) {
 function parseInitialState() {
   const hash = window.location.hash.replace(/^#/, '');
   if (!hash) return { tab: 'today', detail: null };
-  const [tab, detail] = hash.split('/');
-  const validTabs = ['today', 'conversations', 'todos', 'feedback'];
+  const [tab, rawDetail] = hash.split('/');
+  const validTabs = ['today', 'conversations', 'todos', 'feedback', 'lists'];
   if (!validTabs.includes(tab)) return { tab: 'today', detail: null };
-  return { tab, detail: detail || null };
+  return { tab, detail: rawDetail ? decodeURIComponent(rawDetail) : null };
 }
 
 if (!history.state) history.replaceState(parseInitialState(), '');

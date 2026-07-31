@@ -92,6 +92,60 @@ def load_speech_coaching_by_stem(stem: str) -> Optional[dict]:
     return data
 
 
+def aggregate_lists() -> list[dict]:
+    """
+    Groups mentioned_lists items across ALL analyses by list name (matched
+    case/whitespace-insensitively — the LLM is also given existing list
+    names as context to encourage reusing them consistently, but this
+    normalization is the safety net regardless of how well it listens).
+
+    Returns [{"list_name": <display name, first-seen casing>, "items": [...]}],
+    where each item is {"id", "text", "source_stem", "source_title", "date"}.
+
+    Does NOT filter by completed state — same separation as action items:
+    that's a display-layer concern (see webapp.py), this module only reads
+    raw file content.
+    """
+    groups: dict[str, dict] = {}  # normalized name -> {"display_name", "items"}
+
+    def _looks_better_capitalized(candidate: str, current: str) -> bool:
+        # Simple heuristic: prefer the variant with more uppercase letters,
+        # since that's usually the properly title-cased one (e.g. prefer
+        # "Restaurants to Try" over "restaurants to try"). Not perfect, but
+        # avoids the display name being arbitrarily whichever variant
+        # happened to be processed first.
+        return sum(c.isupper() for c in candidate) > sum(c.isupper() for c in current)
+
+    for a in load_all_analyses():
+        stem = a.get("_stem", "")
+        title = a.get("title", stem)
+        date_str = a.get("_date", "")
+        for list_idx, mlist in enumerate(a.get("mentioned_lists", [])):
+            name = mlist.get("list_name", "Misc").strip()
+            normalized = name.lower()
+            if normalized not in groups:
+                groups[normalized] = {"display_name": name, "items": []}
+            elif _looks_better_capitalized(name, groups[normalized]["display_name"]):
+                groups[normalized]["display_name"] = name
+            for item_idx, item_text in enumerate(mlist.get("items", [])):
+                groups[normalized]["items"].append(
+                    {
+                        "id": f"{stem}:mlist:{list_idx}:{item_idx}",
+                        "text": item_text,
+                        "source_stem": stem,
+                        "source_title": title,
+                        "date": date_str,
+                    }
+                )
+
+    return [{"list_name": g["display_name"], "items": g["items"]} for g in groups.values()]
+
+
+def get_all_list_names() -> list[str]:
+    """Distinct list names seen so far, for prompt-time consistency context."""
+    return sorted({g["list_name"] for g in aggregate_lists()})
+
+
 def load_day_analyses(target_date: date) -> list[dict]:
     """Just one day's worth — used by digest.py for the email digest."""
     target_str = target_date.isoformat()

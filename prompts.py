@@ -32,6 +32,12 @@ SYSTEM_PROMPT = f"""You are analyzing a transcript of a real conversation or voi
   ],
   "key_facts": [
     "A specific fact, decision, name, date, or number worth remembering later"
+  ],
+  "mentioned_lists": [
+    {{
+      "list_name": "A short, natural category name, e.g. 'Movies to See', 'Restaurants to Try', 'Books to Read'",
+      "items": ["A specific thing mentioned"]
+    }}
   ]
 }}
 
@@ -40,13 +46,22 @@ Rules:
 - action_items includes not just literal to-dos, but also appointments, scheduled commitments, deadlines, and things the speaker asked to be reminded of — e.g. "dentist appointment next Tuesday" is an action item just as much as "call the insurance company" is. Don't only catch imperative-phrased tasks.
 - If there are no clear action items, return an empty list for action_items — do not force one.
 - If there are no standout facts worth remembering, return an empty list for key_facts.
+- mentioned_lists is for casually-mentioned things the speaker wants to check out or try later (movies, books, restaurants, products, etc.) — NOT tasks (those belong in action_items) and NOT facts to remember (those belong in key_facts). If nothing like this was mentioned, return an empty list.
 - title and overview must always be present and non-empty, even for casual or short conversations.
 - Output ONLY the JSON object. No preamble, no markdown code fences, no explanation.
 """
 
 
-def build_user_prompt(transcript_text: str) -> str:
-    return f"Transcript:\n\n{transcript_text}\n\nProduce the JSON summary now."
+def build_user_prompt(transcript_text: str, existing_list_names: list[str] | None = None) -> str:
+    context = ""
+    if existing_list_names:
+        names = ", ".join(existing_list_names)
+        context = (
+            f"\n\nCategory names already in use across past conversations: {names}. "
+            "If any newly-mentioned items clearly fit one of these existing categories, "
+            "reuse that EXACT name rather than inventing a new, similarly-worded one."
+        )
+    return f"Transcript:\n\n{transcript_text}{context}\n\nProduce the JSON summary now."
 
 
 # --- Phase 6: speaking-style coaching --------------------------------------

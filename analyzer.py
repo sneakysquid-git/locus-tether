@@ -10,11 +10,12 @@ import urllib.error
 import urllib.request
 
 import config
+import data_store
 from prompts import SYSTEM_PROMPT, build_user_prompt
 
 log = logging.getLogger("omi.analyzer")
 
-EXPECTED_KEYS = {"title", "overview", "category", "emoji", "action_items", "key_facts"}
+EXPECTED_KEYS = {"title", "overview", "category", "emoji", "action_items", "key_facts", "mentioned_lists"}
 
 
 def analyze_transcript(transcript_text: str) -> dict:
@@ -24,10 +25,12 @@ def analyze_transcript(transcript_text: str) -> dict:
     JSON, missing expected fields) — callers should catch this and treat it
     as a soft failure, not a reason to lose the underlying transcript.
     """
+    existing_list_names = data_store.get_all_list_names()
+
     payload = {
         "model": config.OLLAMA_MODEL,
         "system": SYSTEM_PROMPT,
-        "prompt": build_user_prompt(transcript_text),
+        "prompt": build_user_prompt(transcript_text, existing_list_names),
         "format": "json",
         "stream": False,
         "options": {"temperature": 0.2},
