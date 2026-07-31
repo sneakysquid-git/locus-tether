@@ -247,7 +247,8 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   #tabbar button { flex: 1; background: none; border: none; color: #6e7681; padding: 12px 4px;
                    font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
   #tabbar button.active { color: #58a6ff; }
-  #tabbar .icon { font-size: 18px; }
+  #tabbar .icon { display: flex; }
+  #tabbar svg { width: 20px; height: 20px; }
 </style>
 </head>
 <body>
@@ -256,10 +257,10 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   <div id="content">Loading...</div>
 
   <div id="tabbar">
-    <button data-tab="today" onclick="goTab('today')"><span class="icon">&#128197;</span>Today</button>
-    <button data-tab="conversations" onclick="goTab('conversations')"><span class="icon">&#128172;</span>Conversations</button>
-    <button data-tab="todos" onclick="goTab('todos')"><span class="icon">&#9745;</span>To-Dos</button>
-    <button data-tab="feedback" onclick="goTab('feedback')"><span class="icon">&#127908;</span>Feedback</button>
+    <button data-tab="today" onclick="goTab('today')"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>Today</button>
+    <button data-tab="conversations" onclick="goTab('conversations')"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>Conversations</button>
+    <button data-tab="todos" onclick="goTab('todos')"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="8 12 11 15 16 9"/></svg></span>To-Dos</button>
+    <button data-tab="feedback" onclick="goTab('feedback')"><span class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg></span>Feedback</button>
   </div>
 
 <script>
