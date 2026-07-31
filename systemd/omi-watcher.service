@@ -4,14 +4,12 @@ After=network.target
 
 [Service]
 Type=simple
-# EDIT THIS to your actual username — systemd requires a concrete user here,
-# %h (used below) only expands to THAT user's home directory once set.
+# EDIT ALL PATHS BELOW — see webapp.service for why %h doesn't work here
+# (it resolves to root's home in system-level units, not User='s home).
 User=efranklin
-WorkingDirectory=%h/projects/thor-training/pipeline
-# Note: this points at the DATA directory (~/omi-data), not the code repo —
-# same separation described in README's "Directory layout on the Thor".
-Environment=OMI_PIPELINE_BASE=%h/omi-data
-ExecStart=%h/projects/thor-training/.venv/bin/python %h/projects/thor-training/pipeline/watcher.py
+WorkingDirectory=/home/efranklin/projects/thor-training/pipeline
+Environment=OMI_PIPELINE_BASE=/home/efranklin/omi-data
+ExecStart=/home/efranklin/projects/thor-training/.venv/bin/python /home/efranklin/projects/thor-training/pipeline/watcher.py
 Restart=on-failure
 RestartSec=5
 
