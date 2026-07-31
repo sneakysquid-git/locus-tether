@@ -1,2 +1,10 @@
-watchdog>=4.0
-faster-whisper>=1.0
+# Host-side (bare-metal, not containerized) dependencies for webapp.py and
+# digest.py — install with: pip3 install -r requirements.txt --break-system-packages
+flask>=3.0
+weasyprint>=60
+
+# watchdog and faster-whisper are NOT listed here — they're only needed if
+# running watcher.py bare-metal instead of via Docker (see
+# systemd/omi-watcher.service). If you go that route, faster-whisper's
+# ctranslate2 dependency has the same GPU-vs-CPU-wheel gotcha documented in
+# detail in docker/Dockerfile — the standard PyPI aarch64 wheel is CPU-only.

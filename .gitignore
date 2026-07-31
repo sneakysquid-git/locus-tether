@@ -1,5 +1,20 @@
-.DS_Store
 __pycache__/
 *.pyc
 .env
 .env.digest
+.DS_Store
+.venv/
+
+# Defensive backstop: none of this should ever actually live inside the
+# repo (see README's "Directory layout" — data lives in a separate
+# OMI_DATA_DIR entirely), but ignoring these folder/file names here means an
+# accidental misconfiguration never results in real audio/transcripts/
+# personal data getting committed.
+inbox/
+processing/
+archive/
+transcripts/
+failed/
+digests/
+todo_state.json
+pipeline.log

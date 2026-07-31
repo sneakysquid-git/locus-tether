@@ -23,6 +23,8 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
+
 import config
 import data_store
 import integrations

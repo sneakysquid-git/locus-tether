@@ -19,6 +19,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
+
 import config
 import speech_metrics
 from prompts import SPEECH_COACH_SYSTEM_PROMPT, build_speech_coach_prompt

@@ -1,0 +1,17 @@
+[Unit]
+Description=Omi on-demand web dashboard
+After=network.target
+
+[Service]
+Type=simple
+# EDIT THIS to your actual username — systemd requires a concrete user here,
+# %h (used below) only expands to THAT user's home directory once set.
+User=efranklin
+WorkingDirectory=%h/projects/thor-training/webapp
+Environment=OMI_PIPELINE_BASE=%h/omi-data
+ExecStart=/usr/bin/python3 %h/projects/thor-training/webapp/webapp.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

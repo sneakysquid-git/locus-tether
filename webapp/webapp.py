@@ -9,17 +9,26 @@ Deliberately lightweight: reads existing JSON files off disk (via
 data_store.py) and serves them — no GPU, no LLM calls, negligible resource
 footprint at rest, safe to run continuously alongside robotics work.
 
-Meant to run on 127.0.0.1 ONLY (see webapp.service) and be exposed to your
-Tailscale network via `tailscale serve` — never bind this to 0.0.0.0 or a
-LAN-reachable interface directly.
+Meant to run on 127.0.0.1 ONLY (see systemd/webapp.service) and be exposed to
+your Tailscale network via `tailscale serve` — never bind this to 0.0.0.0 or
+a LAN-reachable interface directly.
 
 Run with:
     python3 webapp.py
-or as a persistent service — see webapp.service.
+or as a persistent service — see systemd/webapp.service.
 """
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 from flask import Flask, abort, jsonify, request
+
+# pipeline/ holds config.py, data_store.py, integrations.py — shared core
+# modules used by webapp.py, digest.py, and speech_coach.py alike. Added to
+# sys.path explicitly (rather than converting everything to package-relative
+# imports) so this script keeps working the same simple way regardless of
+# working directory — matches how it's invoked both directly and via systemd.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
 import config
 import data_store

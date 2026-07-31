@@ -1,0 +1,12 @@
+[Unit]
+Description=Generate today's Omi conversation digest
+After=network.target
+
+[Service]
+Type=oneshot
+# EDIT THIS to your actual username — systemd requires a concrete user here,
+# %h (used below) only expands to THAT user's home directory once set.
+User=efranklin
+WorkingDirectory=%h/projects/thor-training/digest
+Environment=OMI_PIPELINE_BASE=%h/omi-data
+ExecStart=/usr/bin/python3 %h/projects/thor-training/digest/digest.py

@@ -30,7 +30,7 @@ def _load_dotenv_if_present(path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
-_load_dotenv_if_present(Path(__file__).resolve().parent / ".env.digest")
+_load_dotenv_if_present(Path(__file__).resolve().parent.parent / ".env.digest")
 
 # --- Directories -------------------------------------------------------
 # INBOX_DIR: where Syncthing drops new audio files synced from the phone.

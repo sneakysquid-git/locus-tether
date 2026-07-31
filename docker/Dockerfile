@@ -115,7 +115,7 @@ COPY docker/requirements-docker.txt .
 RUN pip3 install --break-system-packages --no-cache-dir --no-deps faster-whisper \
     && pip3 install --break-system-packages --no-cache-dir -r requirements-docker.txt
 
-COPY config.py transcribe.py watcher.py prompts.py analyzer.py ./
+COPY pipeline/config.py pipeline/transcribe.py pipeline/watcher.py pipeline/prompts.py pipeline/analyzer.py pipeline/data_store.py ./
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

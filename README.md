@@ -283,47 +283,61 @@ device.
 ## Directory layout on the Thor
 
 ```
-/home/efranklin/
+/home/<you>/
 ├── projects/
-│   └── thor-training/               <- CODE (this repo)
-│       ├── config.py
-│       ├── watcher.py
-│       ├── transcribe.py
-│       ├── analyzer.py
-│       ├── prompts.py
-│       ├── integrations.py           <- Things 3 export, date parsing
-│       ├── digest.py
-│       ├── digest.service / .timer
-│       ├── speech_metrics.py         <- Phase 6: free deterministic metrics
-│       ├── speech_coach.py           <- Phase 6: on-demand LLM coaching
-│       ├── webapp.py                 <- Phase 7: on-demand dashboard
-│       ├── todo_state.py             <- Phase 7: persisted checkbox state
-│       ├── webapp.service
-│       ├── omi-watcher.service
-│       ├── requirements.txt
-│       ├── .dockerignore / .gitignore
-│       ├── .env                      <- created locally, not tracked
-│       ├── .env.digest.example       <- tracked template, no real secrets
-│       ├── .env.digest               <- created locally, not tracked (SMTP creds)
+│   └── thor-training/                <- CODE (this repo)
+│       ├── pipeline/                  <- core: transcription + analysis (self-contained)
+│       │   ├── config.py
+│       │   ├── watcher.py
+│       │   ├── transcribe.py
+│       │   ├── analyzer.py
+│       │   ├── prompts.py
+│       │   ├── data_store.py         <- shared data-loading, used by webapp/digest/speech_coach too
+│       │   └── integrations.py       <- Things 3 export, date parsing
+│       ├── webapp/                    <- Phase 7: on-demand dashboard
+│       │   ├── webapp.py
+│       │   └── todo_state.py         <- persisted checkbox state
+│       ├── digest/                    <- Phase 5: daily email/PDF digest
+│       │   └── digest.py
+│       ├── speech_coach/              <- Phase 6: on-demand speaking-style coaching
+│       │   ├── speech_metrics.py     <- free deterministic metrics
+│       │   └── speech_coach.py
+│       ├── systemd/                   <- all .service / .timer unit files
+│       │   ├── omi-watcher.service
+│       │   ├── webapp.service
+│       │   ├── digest.service
+│       │   └── digest.timer
+│       ├── docker/
+│       │   ├── Dockerfile
+│       │   ├── docker-compose.yml
+│       │   ├── entrypoint.sh
+│       │   ├── requirements-docker.txt
+│       │   └── .env.example
 │       ├── analysis/
 │       │   └── analyze.py            <- manual CLI for testing prompt changes
-│       └── docker/
-│           ├── Dockerfile
-│           ├── docker-compose.yml
-│           ├── entrypoint.sh
-│           ├── requirements-docker.txt
-│           └── .env.example
+│       ├── requirements.txt           <- host-side (webapp/digest) deps
+│       ├── LICENSE
+│       ├── .dockerignore / .gitignore
+│       ├── .env                       <- created locally, not tracked
+│       ├── .env.digest.example        <- tracked template, no real secrets
+│       └── .env.digest                <- created locally, not tracked (SMTP creds)
 │
-└── omi-data/                         <- DATA (not part of this repo, not in git)
-    ├── inbox/                        <- Syncthing will drop files here (Phase 1)
+└── omi-data/                          <- DATA (not part of this repo, not in git)
+    ├── inbox/                         <- Syncthing will drop files here (Phase 1)
     ├── processing/
     ├── archive/
-    ├── transcripts/                  <- *.json, *.analysis.json, *.speech_coach.json
+    ├── transcripts/                   <- *.json, *.analysis.json, *.speech_coach.json
     ├── failed/
-    ├── digests/                      <- daily .md digests
-    ├── todo_state.json               <- Phase 7 checkbox state
+    ├── digests/                       <- daily .md digests
+    ├── todo_state.json                <- Phase 7 checkbox state
     └── pipeline.log
 ```
+
+`pipeline/` is deliberately self-contained (no imports outside itself) — the
+other three (`webapp/`, `digest/`, `speech_coach/`) each add `pipeline/` to
+their own `sys.path` at runtime rather than needing Python package/import
+gymnastics. This is a one-directional dependency: `pipeline/` never imports
+from any of the others.
 
 ## Setup on the Thor
 
@@ -331,7 +345,7 @@ device.
 mkdir -p ~/omi-data/{inbox,processing,archive,transcripts,failed,digests}
 cd ~/projects/thor-training
 cp docker/.env.example .env
-# edit .env: OMI_DATA_DIR=/home/efranklin/omi-data
+# edit .env: OMI_DATA_DIR=/home/<you>/omi-data
 ```
 
 **Ollama** (native, not containerized):
@@ -340,12 +354,17 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.1:8b
 ```
 If `ollama ps` shows CPU instead of GPU after a test run, see the systemd
-override notes in `analyzer.py`'s comments — this hardware needs the GPU
-backend forced explicitly.
+override notes in `pipeline/analyzer.py`'s comments — this hardware needs the
+GPU backend forced explicitly.
 
 **The transcription/analysis pipeline** (Docker):
 ```bash
 docker compose -f docker/docker-compose.yml up -d --build
+```
+
+**Host-side dependencies** (webapp + digest, not containerized):
+```bash
+pip3 install -r requirements.txt --break-system-packages
 ```
 
 **Digest email (optional)**:
@@ -353,21 +372,22 @@ docker compose -f docker/docker-compose.yml up -d --build
 cp .env.digest.example .env.digest
 chmod 600 .env.digest   # holds a real SMTP credential
 # fill in real values, then:
-pip3 install weasyprint --break-system-packages
-sudo cp digest.service digest.timer /etc/systemd/system/
+sudo cp systemd/digest.service systemd/digest.timer /etc/systemd/system/
+# edit the copied unit files: set User= to your actual username
 sudo systemctl daemon-reload
 sudo systemctl enable --now digest.timer
 ```
 
 **Speaking style coaching (on-demand)**:
 ```bash
+cd speech_coach
 python3 speech_coach.py ~/omi-data/transcripts/<stem>.json
 ```
 
 **On-demand web dashboard**:
 ```bash
-pip3 install flask --break-system-packages
-sudo cp webapp.service /etc/systemd/system/
+sudo cp systemd/webapp.service /etc/systemd/system/
+# edit the copied unit file: set User= to your actual username
 sudo systemctl daemon-reload
 sudo systemctl enable --now webapp
 sudo tailscale serve --bg https / http://127.0.0.1:5001
@@ -375,10 +395,16 @@ sudo tailscale serve --bg https / http://127.0.0.1:5001
 
 **Persistent watcher (bare-metal alternative to Docker)**:
 ```bash
-sudo cp omi-watcher.service /etc/systemd/system/
+sudo cp systemd/omi-watcher.service /etc/systemd/system/
+# edit the copied unit file: set User= to your actual username
 sudo systemctl daemon-reload
 sudo systemctl enable --now omi-watcher
 ```
+
+All three `systemd/*.service` files use `%h` (systemd's built-in "this
+user's home directory" specifier) for every path — the only line you need to
+edit per-machine is `User=`, since systemd has no way to infer that on its
+own.
 
 ## What's next
 

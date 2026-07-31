@@ -5,8 +5,8 @@ same module watcher.py uses automatically) — kept here for quick manual
 iteration on prompt wording against real transcripts.
 
 Runs on the HOST directly (not in the container) since it talks to Ollama
-at localhost:11434 natively. Requires the repo root on the Python path,
-handled below.
+at localhost:11434 natively. Requires pipeline/ (holding config.py,
+prompts.py, analyzer.py, data_store.py) on the Python path, handled below.
 
 Usage:
     cd analysis
@@ -16,8 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-# Repo root (one level up) holds config.py, prompts.py, analyzer.py.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
 import analyzer  # noqa: E402
 
