@@ -1,6 +1,14 @@
 # Run from the repo root with a `.env` file present (copy docker/.env.example
 # to `.env` and adjust OMI_DATA_DIR first):
-#   docker compose -f docker/docker-compose.yml up -d --build
+#   docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+#
+# The --env-file flag is NOT optional cosmetics: Compose looks for .env
+# relative to THIS FILE's own directory by default, not wherever you run the
+# command from. Since .env lives at repo root (one level up), omitting this
+# flag means OMI_DATA_DIR silently resolves to blank and every bind mount
+# below ends up rooted at the filesystem root instead of your real data
+# directory — with no error, just an easy-to-miss WARN line and a container
+# that still reports "Up".
 #
 # The volumes below read ${OMI_DATA_DIR} from that .env file — it should
 # point at a DATA directory kept separate from this code repo (e.g.
