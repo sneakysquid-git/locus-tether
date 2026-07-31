@@ -152,17 +152,31 @@ def api_today():
         for a in analyses
     ]
 
-    # Due-soon/action items now pull from ALL open history (#10), not just
-    # today's conversations — an old open item should keep surfacing, not
-    # vanish the moment the day changes.
+    # Due-soon/action items are scoped to TODAY's conversations specifically
+    # (fixed in #14 — this used to pull from ALL open history via
+    # _all_open_action_items(), duplicating the dedicated To-Dos tab and
+    # making Today feel cluttered with stale items from other days). The
+    # persistence model from #10 (checked-off items disappear from active
+    # views, but stay visible crossed-out in their own conversation's detail
+    # view) is unaffected — it now lives only in the To-Dos tab, which still
+    # uses _all_open_action_items() below, unchanged.
     due_soon = []
     action_items = []
-    for item in _all_open_action_items():
-        parsed = integrations.parse_relative_date(item.get("due_date"), today)
-        if parsed in (today, tomorrow):
-            due_soon.append(item)
-        else:
-            action_items.append(item)
+    for a in analyses:
+        source_stem = a.get("_stem", "")
+        source_title = a.get("title", source_stem)
+        source_date = a.get("_date", "")
+        for item in _serialize_action_items(a):
+            if item["completed"]:
+                continue
+            item["source_stem"] = source_stem
+            item["source_title"] = source_title
+            item["date"] = source_date
+            parsed = integrations.parse_relative_date(item.get("due_date"), today)
+            if parsed in (today, tomorrow):
+                due_soon.append(item)
+            else:
+                action_items.append(item)
 
     # Key facts stay scoped to TODAY specifically — these are tied to a
     # given conversation's context, not an open/closed work item.
@@ -231,6 +245,40 @@ def api_conversation_detail(stem: str):
 @app.route("/api/todos")
 def api_todos():
     return jsonify(_all_open_action_items())
+
+
+@app.route("/api/todos/completed")
+def api_todos_completed():
+    """
+    Action items completed specifically TODAY — for the To-Dos tab's
+    "Completed" view. Not a deletion of anything: the underlying
+    todo_state.json record is untouched, so a checked-off item still shows
+    crossed-out in its own conversation's detail view regardless of when it
+    was completed. This is purely a today-scoped display filter, which is
+    why it naturally empties out tomorrow without any cleanup job needed —
+    tomorrow, get_completed_date() for these same items just won't equal
+    tomorrow's date anymore.
+    """
+    today_str = date.today().isoformat()
+    items = []
+    for a in data_store.load_all_analyses():
+        source_stem = a.get("_stem", "")
+        source_title = a.get("title", source_stem)
+        source_date = a.get("_date", "")
+        for i, item in enumerate(a.get("action_items", [])):
+            item_id = f"{source_stem}:{i}"
+            if todo_state.get_completed_date(item_id) == today_str:
+                items.append(
+                    {
+                        "id": item_id,
+                        "description": item["description"],
+                        "due_date": item.get("due_date"),
+                        "source_stem": source_stem,
+                        "source_title": source_title,
+                        "date": source_date,
+                    }
+                )
+    return jsonify(items)
 
 
 @app.route("/api/todo/<path:item_id>/toggle", methods=["POST"])
@@ -381,6 +429,7 @@ async function render(state) {
     if (state.tab === 'conversations') return renderConversationDetail(state.detail);
     if (state.tab === 'feedback') return renderFeedbackDetail(state.detail);
     if (state.tab === 'lists') return renderListDetail(state.detail);
+    if (state.tab === 'todos') return renderCompletedTodos();
   }
   if (state.tab === 'today') return renderToday();
   if (state.tab === 'conversations') return renderConversationsList();
@@ -563,18 +612,52 @@ async function renderTodos() {
   document.getElementById('content').innerHTML = 'Loading...';
   const items = await (await fetch('/api/todos')).json();
 
+  let html = `<div style="margin-bottom:12px;">
+    <button onclick="goDetail('todos', 'completed')"
+      style="background:#21262d;color:#8b949e;border:1px solid #30363d;border-radius:6px;padding:6px 12px;font-size:13px;">
+      View Completed Today
+    </button>
+  </div>`;
+
   if (!items.length) {
-    document.getElementById('content').innerHTML = '<p class="empty">No action items recorded.</p>';
+    html += '<p class="empty">No open action items.</p>';
+    document.getElementById('content').innerHTML = html;
     return;
   }
 
-  let html = '';
   items.forEach(item => {
     const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
     html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
       <input type="checkbox" ${item.completed ? 'checked' : ''}
         onclick="toggleTodo('${item.id}', ${item.completed})">
       <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}
+      <span class="source-label" onclick="event.stopPropagation(); goDetail('conversations','${esc(item.source_stem)}')">
+        — ${esc(item.source_title)} (${esc(item.date)})</span></span>
+    </div>`;
+  });
+  document.getElementById('content').innerHTML = html;
+}
+
+async function renderCompletedTodos() {
+  setHeader('', false, true);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const items = await (await fetch('/api/todos/completed')).json();
+
+  let html = '<h1 style="margin-top:8px;">Completed Today</h1>';
+
+  if (!items.length) {
+    html += '<p class="empty">Nothing checked off yet today.</p>';
+    document.getElementById('content').innerHTML = html;
+    return;
+  }
+
+  html += '<p style="color:#8b949e;font-size:13px;">Tap a checkbox to undo — this list clears itself at midnight, but nothing is ever actually deleted (it still shows in its original conversation).</p>';
+
+  items.forEach(item => {
+    const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
+    html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
+      <input type="checkbox" checked onclick="toggleTodo('${item.id}', true)">
+      <span class="desc todo-done">${esc(item.description)}${dueHtml}
       <span class="source-label" onclick="event.stopPropagation(); goDetail('conversations','${esc(item.source_stem)}')">
         — ${esc(item.source_title)} (${esc(item.date)})</span></span>
     </div>`;
@@ -706,16 +789,16 @@ async function renderListDetail(listName) {
 }
 
 async function toggleTodo(id, currentlyDone) {
-  const res = await fetch(`/api/todo/${encodeURIComponent(id)}/toggle`, {
+  await fetch(`/api/todo/${encodeURIComponent(id)}/toggle`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({current_default: currentlyDone})
   });
-  const data = await res.json();
-  document.querySelectorAll(`[data-todo-id="${CSS.escape(id)}"]`).forEach(row => {
-    row.querySelector('input').checked = data.completed;
-    row.querySelector('.desc').classList.toggle('todo-done', data.completed);
-  });
+  // Re-render (not just patch in place) so an item that should now disappear
+  // from view — completed items leaving the open list, un-completed items
+  // leaving the Completed view — actually does so immediately, rather than
+  // sitting there crossed-out until the next manual refresh.
+  render(currentState());
 }
 
 // Initial load: parse the URL hash if present (e.g. a bookmark or restored
