@@ -12,7 +12,7 @@
 #
 # The volumes below read ${OMI_DATA_DIR} from that .env file — it should
 # point at a DATA directory kept separate from this code repo (e.g.
-# /home/efranklin/omi-data). See README's "Directory layout on the Thor".
+# /home/<your-username>/omi-data). See README's "Directory layout on the Thor".
 #
 # Prerequisites on the Thor host before this will actually use the GPU:
 #   1. NVIDIA container runtime installed and set as the default runtime
@@ -73,7 +73,7 @@ services:
     volumes:
       # Pipeline DATA directories on the host — ${OMI_DATA_DIR} here comes
       # from your .env file (see docker/.env.example) and should point at a
-      # directory separate from this code repo, e.g. /home/efranklin/omi-data.
+      # directory separate from this code repo, e.g. /home/<your-username>/omi-data.
       # (Deliberately a different variable name than OMI_PIPELINE_BASE above —
       # that one is the in-container path, this one is the host path, and
       # they should NOT be the same string or this gets confusing fast.)

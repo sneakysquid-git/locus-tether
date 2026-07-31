@@ -26,7 +26,10 @@ per-request. Remote access (the web dashboard, SSH) goes over Tailscale — a
 private encrypted mesh network between your own devices, never the public
 internet.
 
-**GitLab project:** `gl-demo-ultimate-efranklin/thor-training`
+**Original project:** [`gl-demo-ultimate-efranklin/thor-training`](https://gitlab.com/gl-demo-ultimate-efranklin/thor-training)
+— if you've forked this for your own hardware, your own issue tracker will
+have different numbers/URLs than the ones linked below; these point at the
+upstream project's known issues specifically.
 **Known issues** are tracked as real GitLab issues (see the Known Issues
 section below) rather than just code comments, going forward.
 
@@ -339,6 +342,36 @@ their own `sys.path` at runtime rather than needing Python package/import
 gymnastics. This is a one-directional dependency: `pipeline/` never imports
 from any of the others.
 
+## Prerequisites
+
+**Get the code:**
+```bash
+mkdir -p ~/projects && cd ~/projects
+git clone <this-repo-url> thor-training
+cd thor-training
+```
+
+**Docker + NVIDIA Container Runtime** — should already be present on a
+stock JetPack image, but worth confirming before anything else, since a
+missing/misconfigured runtime here causes confusing failures much later:
+```bash
+docker --version
+cat /etc/docker/daemon.json   # should show "default-runtime": "nvidia"
+nvidia-smi -L                 # should list your GPU
+```
+If `default-runtime` isn't set to `nvidia`, the transcription/analysis
+container will build fine but fail to actually see the GPU at runtime.
+
+**Tailscale** (needed for the web dashboard and for reaching this device
+remotely at all):
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+That last command prints a URL — since a headless Thor has no browser,
+open that URL on your phone or laptop to authenticate this device into
+your Tailscale account.
+
 ## Setup on the Thor
 
 ```bash
@@ -353,9 +386,35 @@ cp docker/.env.example .env
 curl -fsSL https://ollama.com/install.sh | sh
 ollama pull llama3.1:8b
 ```
-If `ollama ps` shows CPU instead of GPU after a test run, see the systemd
-override notes in `pipeline/analyzer.py`'s comments — this hardware needs the
-GPU backend forced explicitly.
+Check whether it's actually using the GPU:
+```bash
+ollama run llama3.1:8b "test" --verbose
+ollama ps   # look at the PROCESSOR column — should say "100% GPU", not "100% CPU"
+```
+If it shows CPU, this hardware's install script didn't recognize the JetPack
+version and silently skipped GPU setup — even though the GPU-capable backend
+is already present on disk. Confirm the backend actually exists:
+```bash
+ls /usr/local/lib/ollama/cuda*/   # look for a cuda_v13 (or similar) directory
+```
+If it's there, force Ollama to use it via a systemd override:
+```bash
+sudo systemctl edit ollama
+```
+Add these lines in the editor that opens (adjust the `cuda_v13` path to
+match whatever the `ls` above actually showed):
+```ini
+[Service]
+Environment="OLLAMA_IGPU_ENABLE=1"
+Environment="GGML_BACKEND_PATH=/usr/local/lib/ollama/cuda_v13/libggml-cuda.so"
+Environment="LD_LIBRARY_PATH=/usr/local/lib/ollama:/usr/local/lib/ollama/cuda_v13"
+```
+Then:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+```
+and re-run the `ollama ps` check above to confirm it now shows GPU.
 
 **The transcription/analysis pipeline** (Docker):
 ```bash
@@ -382,7 +441,7 @@ cp .env.digest.example .env.digest
 chmod 600 .env.digest   # holds a real SMTP credential
 # fill in real values, then:
 sudo cp systemd/digest.service systemd/digest.timer /etc/systemd/system/
-# edit the copied unit files: set User= to your actual username
+sudo sed -i "s/<your-username>/$(whoami)/g" /etc/systemd/system/digest.service /etc/systemd/system/digest.timer
 sudo systemctl daemon-reload
 sudo systemctl enable --now digest.timer
 ```
@@ -396,7 +455,7 @@ python3 speech_coach.py ~/omi-data/transcripts/<stem>.json
 **On-demand web dashboard**:
 ```bash
 sudo cp systemd/webapp.service /etc/systemd/system/
-# edit the copied unit file: set User= to your actual username
+sudo sed -i "s/<your-username>/$(whoami)/g" /etc/systemd/system/webapp.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now webapp
 sudo tailscale serve --bg https / http://127.0.0.1:5001
@@ -405,15 +464,21 @@ sudo tailscale serve --bg https / http://127.0.0.1:5001
 **Persistent watcher (bare-metal alternative to Docker)**:
 ```bash
 sudo cp systemd/omi-watcher.service /etc/systemd/system/
-# edit the copied unit file: set User= to your actual username
+sudo sed -i "s/<your-username>/$(whoami)/g" /etc/systemd/system/omi-watcher.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now omi-watcher
 ```
 
-All three `systemd/*.service` files use `%h` (systemd's built-in "this
-user's home directory" specifier) for every path — the only line you need to
-edit per-machine is `User=`, since systemd has no way to infer that on its
-own.
+All three `systemd/*.service` files use an explicit `<your-username>`
+placeholder rather than systemd's `%h` specifier — worth knowing why, since
+`%h` looks like the obvious fix and doesn't work: in system-level units
+(these), `%h` resolves to the *service manager's* home directory (root,
+i.e. `/root`), not the `User=` account's home, regardless of what `User=`
+is set to. That's documented systemd behavior, not a bug — `%h` only
+reliably reflects a unit's own `User=` inside `systemctl --user` (per-user
+manager) instances, not system-wide ones. Find-and-replace
+`<your-username>` with your actual username in each file before installing
+it — every path in these files needs that one substitution.
 
 ## What's next
 

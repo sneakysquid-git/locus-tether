@@ -6,7 +6,7 @@ After=network.target
 Type=oneshot
 # EDIT ALL THREE LINES BELOW — see webapp.service for why %h doesn't work
 # here (it resolves to root's home in system-level units, not User='s home).
-User=efranklin
-WorkingDirectory=/home/efranklin/projects/thor-training/digest
-Environment=OMI_PIPELINE_BASE=/home/efranklin/omi-data
-ExecStart=/usr/bin/python3 /home/efranklin/projects/thor-training/digest/digest.py
+User=<your-username>
+WorkingDirectory=/home/<your-username>/projects/thor-training/digest
+Environment=OMI_PIPELINE_BASE=/home/<your-username>/omi-data
+ExecStart=/usr/bin/python3 /home/<your-username>/projects/thor-training/digest/digest.py

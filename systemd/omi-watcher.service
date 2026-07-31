@@ -6,10 +6,10 @@ After=network.target
 Type=simple
 # EDIT ALL PATHS BELOW — see webapp.service for why %h doesn't work here
 # (it resolves to root's home in system-level units, not User='s home).
-User=efranklin
-WorkingDirectory=/home/efranklin/projects/thor-training/pipeline
-Environment=OMI_PIPELINE_BASE=/home/efranklin/omi-data
-ExecStart=/home/efranklin/projects/thor-training/.venv/bin/python /home/efranklin/projects/thor-training/pipeline/watcher.py
+User=<your-username>
+WorkingDirectory=/home/<your-username>/projects/thor-training/pipeline
+Environment=OMI_PIPELINE_BASE=/home/<your-username>/omi-data
+ExecStart=/home/<your-username>/projects/thor-training/.venv/bin/python /home/<your-username>/projects/thor-training/pipeline/watcher.py
 Restart=on-failure
 RestartSec=5
 

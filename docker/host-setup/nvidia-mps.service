@@ -1,3 +1,6 @@
+# NOT USED — kept for historical reference only. See enable-mps.sh in this
+# same directory for the full story on why MPS was tried, then abandoned.
+
 [Unit]
 Description=NVIDIA CUDA MPS Control Daemon
 After=multi-user.target

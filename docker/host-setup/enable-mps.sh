@@ -1,13 +1,16 @@
 #!/bin/bash
-# Run this ON THE THOR HOST (not inside a container) to start the CUDA MPS
-# control daemon. Containers then connect to it as clients via the same
-# pipe/log directories, mounted in via docker-compose.
+# NOT USED — kept for historical reference only. MPS was tried here for GPU
+# sharing with robotics workloads, then deliberately DISABLED after
+# confirming it causes Ollama's GPU discovery to hang indefinitely on this
+# hardware — a genuine driver-level bug, not a config mistake. See the
+# README's "MPS (Multi-Process Service)" glossary entry for the full story.
+# Do not run this script; the pipeline now relies on default CUDA
+# time-slicing instead.
 #
-# Safe to run this once and leave it running indefinitely — it's a lightweight
-# always-on daemon, not something you start/stop per-workload. Workloads
-# (this pipeline's container, and separately your robotics processes) each
-# just set CUDA_MPS_ACTIVE_THREAD_PERCENTAGE for their own share when they
-# start, and MPS enforces it while they're running.
+# Original purpose (no longer applicable): run this ON THE THOR HOST (not
+# inside a container) to start the CUDA MPS control daemon, so containers
+# could connect to it as clients via shared pipe/log directories mounted in
+# via docker-compose.
 set -euo pipefail
 
 export CUDA_MPS_PIPE_DIRECTORY=/tmp/nvidia-mps
