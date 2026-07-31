@@ -359,8 +359,17 @@ GPU backend forced explicitly.
 
 **The transcription/analysis pipeline** (Docker):
 ```bash
-docker compose -f docker/docker-compose.yml up -d --build
+docker compose --env-file .env -f docker/docker-compose.yml up -d --build
 ```
+`--env-file .env` matters here and isn't optional cosmetics: Compose looks
+for `.env` relative to the *compose file's own directory* by default, not
+wherever you run the command from — since `.env` lives at repo root while
+the compose file is in `docker/`, omitting this flag means `OMI_DATA_DIR`
+silently resolves to blank, and the container ends up bind-mounted to
+filesystem root (`/inbox`, `/transcripts`, etc.) instead of your real data
+directory. It'll still start and report "Up" with no obvious error — the
+only visible sign is a `WARN... variable is not set` line easy to miss or
+assume is harmless.
 
 **Host-side dependencies** (webapp + digest, not containerized):
 ```bash
