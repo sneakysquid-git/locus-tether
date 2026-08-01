@@ -414,9 +414,23 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   </div>
 
 <script>
+// Category colors (#17): designed as an intentional set, not just
+// contrast-math-driven — consistent saturation (75%) with only hue varying
+// per category, and lightness tuned per-hue so all six converge on
+// essentially the same contrast ratio against white text (~5.5:1), which
+// reads as a consistently "bold" set rather than some categories looking
+// bolder than others just because certain hues are perceptually lighter at
+// the same raw lightness value (yellow/green vs. blue/red, for example).
+// "other" is deliberately desaturated/neutral rather than part of the hue
+// wheel, since it's a fallback category, not meant to compete visually.
 const CATEGORY_COLORS = {
-  personal: "#725ff4", work: "#0073e3", education: "#1b8569",
-  health: "#e02f00", finance: "#158482", social: "#e7006f", other: "#6b7580"
+  work: "#1c68c4",       // blue — professional, trustworthy
+  personal: "#7e43e4",   // purple — warm, distinct from work
+  social: "#c61c71",     // pink/magenta — vibrant, communicative
+  health: "#c82b1d",     // red/coral — vitality
+  education: "#896214",  // amber/gold — achievement
+  finance: "#117845",    // green — money, growth
+  other: "#6b7580"        // neutral gray — deliberately not part of the hue wheel
 };
 
 function esc(s) {
