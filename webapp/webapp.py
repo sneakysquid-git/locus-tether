@@ -336,37 +336,65 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <meta name="theme-color" content="#0d1117">
 <title>LocusTether</title>
 <style>
+  :root {
+    /* Spacing scale (#18) — every margin/padding in this app references one
+       of these instead of an ad hoc pixel value, so spacing rhythm stays
+       consistent as the app grows rather than drifting further with every
+       new feature added. */
+    --space-0: 2px;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-7: 32px;
+
+    /* Type scale (#19) — 5 deliberate steps instead of the 7 ad hoc sizes
+       that had accumulated (11/12/13/14/15/16/20px), so there's an actual
+       visual hierarchy pulling the eye to what matters on a given screen. */
+    --text-xs: 11px;   /* category badges, micro labels */
+    --text-sm: 13px;   /* metadata, source labels, dates, secondary text */
+    --text-base: 14px; /* body text, descriptions, list item text */
+    --text-md: 16px;   /* card titles, section headers (h2) */
+    --text-lg: 20px;   /* page title (h1) */
+
+    /* Fixed bottom tab bar height clearance for scrolling content —
+       a functional value, not a decorative spacing choice, so it's kept
+       separate from the spacing scale above. */
+    --tabbar-clearance: 76px;
+  }
   * { box-sizing: border-box; }
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 600px;
-         margin: 0 auto; padding: 16px 16px 76px; color: #e6edf3; background: #0d1117; }
+         margin: 0 auto; padding: var(--space-4) var(--space-4) var(--tabbar-clearance); color: #e6edf3; background: #0d1117; }
   h1, h2 { color: #e6edf3; }
-  h1 { font-size: 20px; display: flex; justify-content: space-between; align-items: center; }
+  h1 { font-size: var(--text-lg); display: flex; justify-content: space-between; align-items: center; }
   #refresh-btn { background: #1f6feb; color: #ffffff; border: none; border-radius: 6px;
-                 padding: 8px 16px; font-size: 14px; }
+                 padding: var(--space-2) var(--space-4); font-size: var(--text-base); }
   #refresh-btn:active { opacity: 0.75; }
-  #back-btn { background: none; border: none; color: #58a6ff; font-size: 15px; padding: 6px 0;
+  #back-btn { background: none; border: none; color: #58a6ff; font-size: var(--text-md); padding: var(--space-2) 0;
               display: flex; align-items: center; gap: 4px; }
-  #last-updated { color: #8b949e; font-size: 12px; margin-top: -8px; margin-bottom: 16px; }
-  .card { border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px;
-          margin-bottom: 12px; background: #161b22; }
-  .list-row { border: 1px solid #30363d; border-radius: 8px; padding: 12px 14px;
-              margin-bottom: 8px; background: #161b22; }
+  #last-updated { color: #8b949e; font-size: var(--text-sm); margin-top: -8px; margin-bottom: var(--space-4); }
+  .card { border: 1px solid #30363d; border-radius: 8px; padding: var(--space-3) var(--space-4);
+          margin-bottom: var(--space-3); background: #161b22; }
+  .list-row { border: 1px solid #30363d; border-radius: 8px; padding: var(--space-3) var(--space-3);
+              margin-bottom: var(--space-2); background: #161b22; }
   .list-row:active { background: #1c2230; }
-  .badge { display: inline-block; color: #ffffff; font-size: 11px; padding: 2px 8px;
-           border-radius: 10px; margin: 6px 0; }
-  .todo-row { display: flex; align-items: baseline; padding: 8px 0; border-bottom: 1px solid #21262d; }
-  .todo-row input { margin-right: 10px; width: 18px; height: 18px; flex-shrink: 0; }
+  .badge { display: inline-block; color: #ffffff; font-size: var(--text-xs); padding: var(--space-0) var(--space-2);
+           border-radius: 10px; margin: var(--space-2) 0; }
+  .todo-row { display: flex; align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid #21262d; }
+  .todo-row input { margin-right: var(--space-2); width: 18px; height: 18px; flex-shrink: 0; }
   .todo-row .desc { color: #e6edf3; }
   .todo-done { text-decoration: line-through; color: #6e7681; }
-  .due { color: #ff9662; font-size: 12px; }
+  .due { color: #ff9662; font-size: var(--text-sm); }
   .empty { color: #8b949e; }
-  .source-label { color: #6e7681; font-size: 12px; }
-  .date-label { color: #6e7681; font-size: 11px; }
+  .source-label { color: #6e7681; font-size: var(--text-sm); }
+  .date-label { color: #6e7681; font-size: var(--text-xs); }
 
   #tabbar { position: fixed; bottom: 0; left: 0; right: 0; background: #161b22;
             border-top: 1px solid #30363d; display: flex; max-width: 600px; margin: 0 auto; }
-  #tabbar button { flex: 1; background: none; border: none; color: #6e7681; padding: 12px 4px;
-                   font-size: 12px; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  #tabbar button { flex: 1; background: none; border: none; color: #6e7681; padding: var(--space-3) var(--space-1);
+                   font-size: var(--text-sm); display: flex; flex-direction: column; align-items: center; gap: 2px; }
   #tabbar button.active { color: #58a6ff; }
   #tabbar .icon { display: flex; }
   #tabbar svg { width: 20px; height: 20px; }
@@ -454,7 +482,7 @@ async function renderToday() {
   document.getElementById('content').innerHTML = 'Loading...';
   const data = await (await fetch('/api/today')).json();
 
-  let html = `<p style="color:#8b949e;font-size:14px;">
+  let html = `<p style="color:#8b949e;font-size:var(--text-base);">
     ${data.conversation_count} conversation(s) today</p>`;
 
   if (!data.conversation_count && !data.action_items.length && !data.due_soon.length) {
@@ -466,9 +494,9 @@ async function renderToday() {
   // --- Due soon: pulled out from the general list since "due tomorrow"
   // deserves more attention than "no deadline at all". ---
   if (data.due_soon.length) {
-    html += '<h2 style="font-size:16px;">Due soon</h2>';
+    html += '<h2 style="font-size:var(--text-md);">Due soon</h2>';
     data.due_soon.forEach(item => {
-      html += `<div class="todo-row" style="border-left:3px solid #ff9662;padding-left:8px;"
+      html += `<div class="todo-row" style="border-left:3px solid #ff9662;padding-left:var(--space-2);"
         data-todo-id="${esc(item.id)}">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
           onclick="toggleTodo('${item.id}', ${item.completed})">
@@ -481,19 +509,19 @@ async function renderToday() {
 
   // --- Today's conversations: compact, tappable rows into full detail ---
   if (data.conversations.length) {
-    html += '<h2 style="font-size:16px;margin-top:20px;">Conversations today</h2>';
+    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Conversations today</h2>';
     data.conversations.forEach(c => {
       const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
-      html += `<div class="list-row" style="padding:10px 14px;" onclick="goDetail('conversations', '${esc(c.stem)}')">
+      html += `<div class="list-row" style="padding:var(--space-2) var(--space-3);" onclick="goDetail('conversations', '${esc(c.stem)}')">
         <span style="font-weight:600;">${c.emoji || ''} ${esc(c.title)}</span>
-        <span class="badge" style="background:${color};margin-left:8px;">${esc(c.category)}</span>
+        <span class="badge" style="background:${color};margin-left:var(--space-2);">${esc(c.category)}</span>
       </div>`;
     });
   }
 
   // --- Remaining action items (due-soon ones already shown above) ---
   if (data.action_items.length) {
-    html += '<h2 style="font-size:16px;margin-top:20px;">Action items</h2>';
+    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Action items</h2>';
     data.action_items.forEach(item => {
       const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
       html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
@@ -507,7 +535,7 @@ async function renderToday() {
 
   // --- Key facts rollup across today's conversations ---
   if (data.key_facts.length) {
-    html += '<h2 style="font-size:16px;margin-top:20px;">Key facts</h2><ul style="font-size:14px;padding-left:20px;">';
+    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Key facts</h2><ul style="font-size:var(--text-base);padding-left:var(--space-5);">';
     data.key_facts.forEach(kf => {
       html += `<li>${esc(kf.fact)} <span class="source-label">— ${esc(kf.source_title)}</span></li>`;
     });
@@ -516,18 +544,18 @@ async function renderToday() {
 
   // --- Speaking style teasers: one line + tap-through to full detail ---
   if (data.speech_coaching.length) {
-    html += '<h2 style="font-size:16px;margin-top:20px;">Speaking Style Feedback</h2>';
+    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Speaking Style Feedback</h2>';
     data.speech_coaching.forEach(sc => {
       html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
         <div style="font-weight:600;">${esc(sc.title)}</div>
-        <p style="font-size:13px;color:#8b949e;margin:4px 0 0;">${esc(sc.overall_take_preview)}</p>
+        <p style="font-size:var(--text-sm);color:#8b949e;margin:var(--space-1) 0 0;">${esc(sc.overall_take_preview)}</p>
       </div>`;
     });
   }
 
   // --- Lists teaser: named lists that got new items added today ---
   if (data.lists_today.length) {
-    html += '<h2 style="font-size:16px;margin-top:20px;">Added to lists today</h2>';
+    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Added to lists today</h2>';
     data.lists_today.forEach(l => {
       html += `<div class="list-row" onclick="goDetail('lists', '${esc(l.list_name)}')">
         <div style="display:flex;justify-content:space-between;">
@@ -560,7 +588,7 @@ async function renderConversationsList() {
         <div class="date-label">${esc(c.date)}</div>
       </div>
       <span class="badge" style="background:${color};">${esc(c.category)}</span>
-      <p style="font-size:13px;color:#8b949e;margin:6px 0 0;">${esc(c.preview)}</p>
+      <p style="font-size:var(--text-sm);color:#8b949e;margin:var(--space-2) 0 0;">${esc(c.preview)}</p>
     </div>`;
   });
   document.getElementById('content').innerHTML = html;
@@ -577,19 +605,19 @@ async function renderConversationDetail(stem) {
   const c = await res.json();
   const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
 
-  let html = `<h1 style="margin-top:8px;">${c.emoji || ''} ${esc(c.title)}</h1>
-    <div class="date-label" style="margin-bottom:6px;">${esc(c.date)}</div>
+  let html = `<h1 style="margin-top:var(--space-2);">${c.emoji || ''} ${esc(c.title)}</h1>
+    <div class="date-label" style="margin-bottom:var(--space-2);">${esc(c.date)}</div>
     <span class="badge" style="background:${color};">${esc(c.category)}</span>
-    <p style="font-size:15px;line-height:1.6;margin-top:12px;">${esc(c.overview)}</p>`;
+    <p style="font-size:var(--text-md);line-height:1.6;margin-top:var(--space-3);">${esc(c.overview)}</p>`;
 
   if (c.key_facts.length) {
-    html += '<h2 style="font-size:16px;">Key facts</h2><ul style="font-size:14px;">';
+    html += '<h2 style="font-size:var(--text-md);">Key facts</h2><ul style="font-size:var(--text-base);">';
     c.key_facts.forEach(f => { html += `<li>${esc(f)}</li>`; });
     html += '</ul>';
   }
 
   if (c.action_items.length) {
-    html += '<h2 style="font-size:16px;">Action items</h2>';
+    html += '<h2 style="font-size:var(--text-md);">Action items</h2>';
     c.action_items.forEach(item => {
       const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
       html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
@@ -612,9 +640,9 @@ async function renderTodos() {
   document.getElementById('content').innerHTML = 'Loading...';
   const items = await (await fetch('/api/todos')).json();
 
-  let html = `<div style="margin-bottom:12px;">
+  let html = `<div style="margin-bottom:var(--space-3);">
     <button onclick="goDetail('todos', 'completed')"
-      style="background:#21262d;color:#8b949e;border:1px solid #30363d;border-radius:6px;padding:6px 12px;font-size:13px;">
+      style="background:#21262d;color:#8b949e;border:1px solid #30363d;border-radius:6px;padding:var(--space-2) var(--space-3);font-size:var(--text-sm);">
       View Completed Today
     </button>
   </div>`;
@@ -643,7 +671,7 @@ async function renderCompletedTodos() {
   document.getElementById('content').innerHTML = 'Loading...';
   const items = await (await fetch('/api/todos/completed')).json();
 
-  let html = '<h1 style="margin-top:8px;">Completed Today</h1>';
+  let html = '<h1 style="margin-top:var(--space-2);">Completed Today</h1>';
 
   if (!items.length) {
     html += '<p class="empty">Nothing checked off yet today.</p>';
@@ -651,7 +679,7 @@ async function renderCompletedTodos() {
     return;
   }
 
-  html += '<p style="color:#8b949e;font-size:13px;">Tap a checkbox to undo — this list clears itself at midnight, but nothing is ever actually deleted (it still shows in its original conversation).</p>';
+  html += '<p style="color:#8b949e;font-size:var(--text-sm);">Tap a checkbox to undo — this list clears itself at midnight, but nothing is ever actually deleted (it still shows in its original conversation).</p>';
 
   items.forEach(item => {
     const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
@@ -683,8 +711,8 @@ async function renderFeedbackList() {
         <div style="font-weight:600;">${esc(sc.title)}</div>
         <div class="date-label">${esc(sc.date)}</div>
       </div>
-      <div style="font-size:12px;color:#8b949e;margin:4px 0;">${sc.words_per_minute} WPM</div>
-      <p style="font-size:13px;color:#8b949e;margin:0;">${esc(sc.overall_take_preview)}</p>
+      <div style="font-size:var(--text-sm);color:#8b949e;margin:var(--space-1) 0;">${sc.words_per_minute} WPM</div>
+      <p style="font-size:var(--text-sm);color:#8b949e;margin:0;">${esc(sc.overall_take_preview)}</p>
     </div>`;
   });
   document.getElementById('content').innerHTML = html;
@@ -696,22 +724,22 @@ function renderFeedbackCardHtml(sc, title) {
   const fillerNote = fillers.total_filler_count ? `, ${fillers.total_filler_count} filler words` : '';
   const fb = sc.feedback;
 
-  let html = `<h2 style="font-size:16px;margin-top:24px;">Speaking Style Feedback</h2>
+  let html = `<h2 style="font-size:var(--text-md);margin-top:var(--space-6);">Speaking Style Feedback</h2>
     <div class="card">
-      <div style="font-size:12px;color:#8b949e;margin-bottom:8px;">
+      <div style="font-size:var(--text-sm);color:#8b949e;margin-bottom:var(--space-2);">
         ${pace.words_per_minute} WPM, ${pace.duration_seconds}s${fillerNote}
       </div>`;
 
   if (fb.strengths && fb.strengths.length) {
-    html += '<div style="font-size:13px;"><strong>Strengths:</strong></div><ul style="font-size:13px;margin:4px 0 10px;padding-left:20px;">';
+    html += '<div style="font-size:var(--text-sm);"><strong>Strengths:</strong></div><ul style="font-size:var(--text-sm);margin:var(--space-1) 0 10px;padding-left:var(--space-5);">';
     fb.strengths.forEach(s => { html += `<li>${esc(s)}</li>`; });
     html += '</ul>';
   }
 
   if (fb.areas_to_improve && fb.areas_to_improve.length) {
-    html += '<div style="font-size:13px;"><strong>Areas to improve:</strong></div>';
+    html += '<div style="font-size:var(--text-sm);"><strong>Areas to improve:</strong></div>';
     fb.areas_to_improve.forEach(area => {
-      html += `<div style="font-size:13px;margin:6px 0 10px;">
+      html += `<div style="font-size:var(--text-sm);margin:var(--space-2) 0 10px;">
         ${esc(area.observation)}<br>
         <span style="color:#8b949e;">Example: "${esc(area.example)}"</span><br>
         <span style="color:#3fb950;">Try instead: ${esc(area.suggestion)}</span>
@@ -719,8 +747,8 @@ function renderFeedbackCardHtml(sc, title) {
     });
   }
 
-  if (fb.pace_feedback) html += `<p style="font-size:13px;"><strong>Pace:</strong> ${esc(fb.pace_feedback)}</p>`;
-  if (fb.overall_take) html += `<p style="font-size:13px;"><strong>Overall:</strong> ${esc(fb.overall_take)}</p>`;
+  if (fb.pace_feedback) html += `<p style="font-size:var(--text-sm);"><strong>Pace:</strong> ${esc(fb.pace_feedback)}</p>`;
+  if (fb.overall_take) html += `<p style="font-size:var(--text-sm);"><strong>Overall:</strong> ${esc(fb.overall_take)}</p>`;
 
   html += '</div>';
   return html;
@@ -736,7 +764,7 @@ async function renderFeedbackDetail(stem) {
   }
   const sc = await res.json();
   document.getElementById('content').innerHTML =
-    `<h1 style="margin-top:8px;">${esc(sc.title)}</h1>` + renderFeedbackCardHtml(sc, sc.title);
+    `<h1 style="margin-top:var(--space-2);">${esc(sc.title)}</h1>` + renderFeedbackCardHtml(sc, sc.title);
 }
 
 async function renderListsList() {
@@ -772,7 +800,7 @@ async function renderListDetail(listName) {
   }
   const data = await res.json();
 
-  let html = `<h1 style="margin-top:8px;">${esc(data.list_name)}</h1>`;
+  let html = `<h1 style="margin-top:var(--space-2);">${esc(data.list_name)}</h1>`;
   if (!data.items.length) {
     html += '<p class="empty">Nothing left on this list.</p>';
   } else {
