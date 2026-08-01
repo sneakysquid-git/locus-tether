@@ -78,6 +78,25 @@ services:
       # (e.g. on a smaller GPU where the added ~4GB isn't available).
       OMI_DIARIZATION_ENABLED: ${OMI_DIARIZATION_ENABLED:-true}
       HF_TOKEN: ${HF_TOKEN:-}
+      # --- Fully offline operation, after the FIRST successful run ---
+      # By default, Hugging Face's client libraries still make a quick
+      # network check-in on every load even when a model is already fully
+      # cached locally (checking for a newer revision) — so without this,
+      # "only hits the network the first time" isn't actually true yet.
+      #
+      # Leave the line below commented out for your very first run (it
+      # needs real network access to download the alignment/diarization
+      # models at all). Once you've confirmed a real diarization run
+      # succeeded and populated the whisper-model-cache volume, uncomment
+      # it and rebuild — this instance then never touches Hugging Face's
+      # servers again, matching the fully-local/airgapped design of
+      # everything else in this project.
+      #
+      # NOTE: per the upstream whisperx-asr-service project's own
+      # documented gotcha, this needs to be set directly here, NOT passed
+      # through the .env file — apparently unreliable there for this
+      # specific variable.
+      # HF_HUB_OFFLINE: "1"
     volumes:
       # Pipeline DATA directories on the host — ${OMI_DATA_DIR} here comes
       # from your .env file (see docker/.env.example) and should point at a
