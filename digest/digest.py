@@ -443,7 +443,7 @@ def send_email(target_date: date, markdown: str, html_body: str, things_link: Op
         )
 
     msg = MIMEMultipart("mixed")
-    msg["Subject"] = f"Omi Daily Digest — {target_date.isoformat()}"
+    msg["Subject"] = f"LocusTether Digest — {target_date.isoformat()}"
     msg["From"] = config.DIGEST_EMAIL_FROM
     msg["To"] = config.DIGEST_EMAIL_TO
 

@@ -1,4 +1,4 @@
-# Omi → Jetson Thor: A Fully Local AI Memory Pipeline
+# LocusTether: A Fully Local AI Memory Pipeline for the Omi Wearable
 
 ## What is an Omi?
 
@@ -11,13 +11,13 @@ An Omi wearable is a small, orb-shaped AI device created by the tech startup Bas
 
 ## What this project is
 
-This is a self-hosted replacement for the Omi wearable's normal cloud
-pipeline. Omi's official app streams your audio to Omi's servers, where a
-cloud LLM turns it into summaries, to-do lists, and searchable notes. This
-project gets the same *value* — automatic transcription, structured
-summaries, speaking-style coaching, and an always-current dashboard of your
-conversations — without any of that audio or text ever leaving your own
-hardware.
+**LocusTether** is a self-hosted replacement for the Omi wearable's normal
+cloud pipeline. Omi's official app streams your audio to Omi's servers,
+where a cloud LLM turns it into summaries, to-do lists, and searchable
+notes. LocusTether gets the same *value* — automatic transcription,
+structured summaries, speaking-style coaching, and an always-current
+dashboard of your conversations — without any of that audio or text ever
+leaving your own hardware.
 
 Everything runs on a single NVIDIA Jetson Thor: the speech-to-text model,
 the language model that summarizes it, and the code that ties it all

@@ -334,7 +334,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#0d1117">
-<title>Omi Daily Digest</title>
+<title>LocusTether</title>
 <style>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 600px;
@@ -450,7 +450,7 @@ function setHeader(title, showRefresh, showBack) {
 }
 
 async function renderToday() {
-  setHeader('Omi Daily Digest', true, false);
+  setHeader('LocusTether', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
   const data = await (await fetch('/api/today')).json();
 

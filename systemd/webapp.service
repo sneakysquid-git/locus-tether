@@ -1,5 +1,5 @@
 [Unit]
-Description=Omi on-demand web dashboard
+Description=LocusTether on-demand web dashboard
 After=network.target
 
 [Service]

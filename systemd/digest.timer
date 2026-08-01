@@ -1,5 +1,5 @@
 [Unit]
-Description=Run the Omi daily digest every evening
+Description=Run the LocusTether daily digest every evening
 
 [Timer]
 # 8pm daily. Adjust to whenever makes sense for you — after most of a

@@ -1,5 +1,5 @@
 [Unit]
-Description=Omi audio watcher/transcriber (bare-metal, no Docker)
+Description=LocusTether audio watcher/transcriber (bare-metal, no Docker)
 After=network.target
 
 [Service]

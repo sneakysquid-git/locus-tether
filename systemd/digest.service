@@ -1,5 +1,5 @@
 [Unit]
-Description=Generate today's Omi conversation digest
+Description=Generate today's LocusTether conversation digest
 After=network.target
 
 [Service]
