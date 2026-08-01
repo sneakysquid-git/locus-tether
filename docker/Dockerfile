@@ -115,7 +115,22 @@ COPY docker/requirements-docker.txt .
 RUN pip3 install --break-system-packages --no-cache-dir --no-deps faster-whisper \
     && pip3 install --break-system-packages --no-cache-dir -r requirements-docker.txt
 
-COPY pipeline/config.py pipeline/transcribe.py pipeline/watcher.py pipeline/prompts.py pipeline/analyzer.py pipeline/data_store.py ./
+# --- Phase 1 diarization (speaker labels) -----------------------------------
+# Unlike faster-whisper/CTranslate2 above (deliberately built from source to
+# avoid a PyTorch dependency), alignment (wav2vec2) and diarization
+# (pyannote.audio) are both PyTorch-native — confirmed PyTorch's official
+# wheels install cleanly and detect CUDA correctly on this hardware (Jetson
+# Thor, JetPack 7.2), so unlike CTranslate2 this did NOT need a from-source
+# build. See pipeline/diarize.py for the actual integration — adapted from
+# murtaza-nasir/whisperx-asr-service (MIT licensed).
+#
+# Deliberately a separate, optional layer: set ENABLE_DIARIZATION=false (see
+# docker-compose.yml) to skip this entirely — useful on smaller GPUs where
+# the added ~4GB isn't available. See HARDWARE.md.
+RUN pip3 install --break-system-packages --no-cache-dir torch \
+    && pip3 install --break-system-packages --no-cache-dir whisperx pyannote.audio
+
+COPY pipeline/config.py pipeline/transcribe.py pipeline/watcher.py pipeline/prompts.py pipeline/analyzer.py pipeline/data_store.py pipeline/diarize.py ./
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

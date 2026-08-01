@@ -70,6 +70,14 @@ services:
       OMI_WHISPER_MODEL: large-v3
       OMI_WHISPER_DEVICE: cuda
       OMI_WHISPER_COMPUTE_TYPE: float16
+
+      # --- Phase 1 diarization (speaker labels) ---
+      # HF_TOKEN comes from your .env file — needs a free Hugging Face
+      # account plus accepting 3 model agreements, see .env.example.
+      # Set OMI_DIARIZATION_ENABLED=false in .env to skip this entirely
+      # (e.g. on a smaller GPU where the added ~4GB isn't available).
+      OMI_DIARIZATION_ENABLED: ${OMI_DIARIZATION_ENABLED:-true}
+      HF_TOKEN: ${HF_TOKEN:-}
     volumes:
       # Pipeline DATA directories on the host — ${OMI_DATA_DIR} here comes
       # from your .env file (see docker/.env.example) and should point at a

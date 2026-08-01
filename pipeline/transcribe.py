@@ -1,6 +1,12 @@
 """
 Thin wrapper around faster-whisper. Loads the model once (expensive) and
 exposes a single transcribe_file() call used by the watcher.
+
+Diarization (Phase 1, see diarize.py) runs as an additional step after
+transcription, populating the "speaker" field that used to always be None
+— kept as a fully separate module/optional step so this file's own
+CTranslate2-based transcription stays untouched regardless of whether
+diarization is enabled, working, or even installed.
 """
 import json
 import logging
@@ -8,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import config
+import diarize
 
 log = logging.getLogger("omi.transcribe")
 
@@ -38,11 +45,16 @@ def transcribe_file(audio_path: Path) -> Dict[str, Any]:
     """
     Runs faster-whisper on audio_path and returns a dict with:
       - text: full transcript as a single string
-      - segments: list of {start, end, text, speaker (always None here — no diarization yet)}
+      - segments: list of {start, end, text, speaker}
       - language: detected/used language code
       - duration: audio duration in seconds
     Raises whatever faster-whisper raises on decode/inference failure — the
     caller (watcher) is responsible for catching and routing to FAILED_DIR.
+
+    Speaker labels come from diarize.py's align_and_diarize() (Phase 1),
+    run after transcription completes — a soft-failing, optional step (see
+    that module's docstring), so segments["speaker"] stays None if
+    diarization is disabled, unconfigured, or fails for any reason.
     """
     model = get_model()
 
@@ -60,7 +72,7 @@ def transcribe_file(audio_path: Path) -> Dict[str, Any]:
                 "start": round(seg.start, 2),
                 "end": round(seg.end, 2),
                 "text": seg.text.strip(),
-                "speaker": None,  # placeholder — add pyannote diarization later if wanted
+                "speaker": None,  # populated below by diarize.align_and_diarize, if enabled
             }
         )
         full_text_parts.append(seg.text.strip())
@@ -73,6 +85,9 @@ def transcribe_file(audio_path: Path) -> Dict[str, Any]:
         "text": " ".join(full_text_parts).strip(),
         "segments": segments,
     }
+
+    result = diarize.align_and_diarize(audio_path, result)
+
     return result
 
 

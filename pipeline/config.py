@@ -66,6 +66,23 @@ WHISPER_COMPUTE_TYPE = os.environ.get("OMI_WHISPER_COMPUTE_TYPE", "float16")
 WHISPER_LANGUAGE = os.environ.get("OMI_WHISPER_LANGUAGE")  # None = auto-detect
 WHISPER_VAD_FILTER = os.environ.get("OMI_WHISPER_VAD_FILTER", "true").lower() == "true"
 
+# --- Phase 1 diarization (speaker labels) ---------------------------------
+# See pipeline/diarize.py for the actual integration. Deliberately optional
+# (DIARIZATION_ENABLED) and off by default without a token, since it needs a
+# real Hugging Face account + model agreements — see .env.example.
+DIARIZATION_ENABLED = os.environ.get("OMI_DIARIZATION_ENABLED", "true").lower() == "true"
+DIARIZATION_DEVICE = os.environ.get("OMI_DIARIZATION_DEVICE", WHISPER_DEVICE)
+HF_TOKEN = os.environ.get("HF_TOKEN")  # deliberately NOT OMI_-prefixed — matches the
+# upstream whisperx-asr-service project's own convention, so anyone already
+# familiar with that project (or copying its .env) doesn't need to translate
+# variable names.
+DIARIZATION_CACHE_DIR = os.environ.get("OMI_DIARIZATION_CACHE_DIR", "/root/.cache/huggingface")
+# Idle model eviction — unloads alignment/diarization models after this many
+# idle seconds, so they don't sit resident in memory all day between
+# sporadic recordings, competing with other GPU workloads at rest.
+MODEL_KEEP_ALIVE_SECONDS = int(os.environ.get("OMI_MODEL_KEEP_ALIVE_SECONDS", "600"))
+MODEL_EVICTION_INTERVAL_SECONDS = max(30, int(os.environ.get("OMI_MODEL_EVICTION_INTERVAL_SECONDS", "60")))
+
 # --- Ollama (Phase 4: transcript -> structured analysis) -----------------
 # Ollama runs natively on the Thor host (not containerized), so the pipeline
 # container reaches it via the host's network — see docker-compose.yml's
