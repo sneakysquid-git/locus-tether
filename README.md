@@ -33,6 +33,44 @@ upstream project's known issues specifically.
 **Known issues** are tracked as real GitLab issues (see the Known Issues
 section below) rather than just code comments, going forward.
 
+## Prior art — is this actually new?
+
+Worth being upfront about, both for intellectual honesty and so nobody
+mistakes this for solving a problem that was already solved:
+
+**The core idea (local Whisper + local LLM instead of cloud AI) isn't
+novel.** Plenty of projects do that swap.
+
+**Omi's own official backend already supports pointing at local
+Whisper/Ollama** as a documented configuration option — but "self-hosted"
+here is misleading if you're expecting something airgapped. Their backend
+still depends on Firebase, Pinecone, Redis, and Typesense as real external
+cloud services even when you're running the FastAPI server yourself.
+You're relocating *where the code runs*, not eliminating the cloud
+dependencies — genuinely different from LocusTether's actual zero-cloud-
+service design.
+
+**[`omibutfree`](https://github.com/kbdevs/omibutfree) is a real, complete
+self-hosted Omi companion that already exists** — worth knowing about
+rather than pretending it doesn't. It's genuinely comprehensive for what it
+does: 100% local storage, local Whisper, no middleman servers. Three
+concrete differences from LocusTether, though, not just a rebrand of the
+same thing:
+- **iOS/Swift only** — doesn't help on Android at all
+- **Processes audio on the phone itself**, not offloaded to a separate,
+  more powerful host machine — a different architecture and a different
+  set of hardware assumptions than LocusTether's design
+- **Narrower feature set**: capture, transcribe, and summarize, without
+  LocusTether's daily digest (email + PDF + Things 3 export), multi-tab
+  dashboard, persistent to-do/lists tracking, or speaking-style coaching
+
+So: the underlying *technique* here is well-trodden ground. What doesn't
+appear to already exist, as far as this research found, is the specific
+combination LocusTether targets — genuinely zero cloud service
+dependencies (not just relocated compute), works from any Android phone
+via Syncthing to whatever host hardware you have (not locked to
+processing-on-the-phone), plus the fuller productivity layer built on top.
+
 ## System architecture (how it actually runs)
 
 ```mermaid
