@@ -22,7 +22,6 @@ SYSTEM_PROMPT = f"""You are analyzing a transcript of a real conversation or voi
   "title": "A short, specific title (5-8 words) capturing what this was about",
   "overview": "A 2-4 sentence summary of what was discussed or said, written in third person, past tense",
   "category": "One of: {', '.join(CATEGORIES)}",
-  "emoji": "A single emoji that represents the content",
   "action_items": [
     {{
       "description": "A specific, actionable task, commitment, or reminder",

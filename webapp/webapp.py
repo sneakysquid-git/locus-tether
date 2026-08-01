@@ -63,7 +63,6 @@ def _condensed_conversation(a: dict) -> dict:
         "stem": a.get("_stem", ""),
         "date": a.get("_date", ""),
         "title": a.get("title", a.get("_stem", "")),
-        "emoji": a.get("emoji", ""),
         "category": a.get("category", "uncategorized"),
         "preview": preview,
         "action_item_count": len(a.get("action_items", [])),
@@ -77,7 +76,6 @@ def _full_conversation(a: dict) -> dict:
         "stem": stem,
         "date": a.get("_date", ""),
         "title": a.get("title", stem),
-        "emoji": a.get("emoji", ""),
         "category": a.get("category", "uncategorized"),
         "overview": a.get("overview", ""),
         "key_facts": a.get("key_facts", []),
@@ -146,7 +144,6 @@ def api_today():
         {
             "stem": a.get("_stem", ""),
             "title": a.get("title", a.get("_stem", "")),
-            "emoji": a.get("emoji", ""),
             "category": a.get("category", "uncategorized"),
         }
         for a in analyses
@@ -451,6 +448,28 @@ const CATEGORY_COLORS = {
   other: "#6b7580"        // neutral gray — deliberately not part of the hue wheel
 };
 
+// Category icons — deliberately replacing the LLM-generated per-conversation
+// emoji field entirely (removed from the prompt schema too, not just hidden
+// here). One consistent, controlled icon per category instead of an
+// unreliable per-conversation model choice — same outline-icon style as the
+// tab bar (#11/#21), inheriting color via currentColor.
+const CATEGORY_ICON_PATHS = {
+  personal: '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+  work: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  education: '<path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c0 1.7 2.7 3 6 3s6-1.3 6-3v-5"/>',
+  health: '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/>',
+  finance: '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+  social: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  other: '<path d="M20.59 13.41L11 3.83A2 2 0 0 0 9.59 3.24H4a1 1 0 0 0-1 1v5.59a2 2 0 0 0 .59 1.41l9.58 9.59a2 2 0 0 0 2.82 0l5.6-5.6a2 2 0 0 0 0-2.82z"/><circle cx="7.5" cy="7.5" r="1"/>',
+};
+
+function categoryIcon(category) {
+  const path = CATEGORY_ICON_PATHS[category] || CATEGORY_ICON_PATHS.other;
+  return `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" ` +
+    `stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ` +
+    `style="vertical-align:-3px;">${path}</svg>`;
+}
+
 function esc(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : s;
@@ -545,7 +564,7 @@ async function renderToday() {
     data.conversations.forEach(c => {
       const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
       html += `<div class="list-row" style="padding:var(--space-2) var(--space-3);" onclick="goDetail('conversations', '${esc(c.stem)}')">
-        <span style="font-weight:600;">${c.emoji || ''} ${esc(c.title)}</span>
+        <span style="font-weight:600;">${categoryIcon(c.category)} ${esc(c.title)}</span>
         <span class="badge" style="background:${color};margin-left:var(--space-2);">${esc(c.category)}</span>
       </div>`;
     });
@@ -616,7 +635,7 @@ async function renderConversationsList() {
     const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
     html += `<div class="list-row" onclick="goDetail('conversations', '${esc(c.stem)}')">
       <div style="display:flex;justify-content:space-between;">
-        <div style="font-weight:600;">${c.emoji || ''} ${esc(c.title)}</div>
+        <div style="font-weight:600;">${categoryIcon(c.category)} ${esc(c.title)}</div>
         <div class="date-label">${esc(c.date)}</div>
       </div>
       <span class="badge" style="background:${color};">${esc(c.category)}</span>
@@ -637,7 +656,7 @@ async function renderConversationDetail(stem) {
   const c = await res.json();
   const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
 
-  let html = `<h1 style="margin-top:var(--space-2);">${c.emoji || ''} ${esc(c.title)}</h1>
+  let html = `<h1 style="margin-top:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</h1>
     <div class="date-label" style="margin-bottom:var(--space-2);">${esc(c.date)}</div>
     <span class="badge" style="background:${color};">${esc(c.category)}</span>
     <p style="font-size:var(--text-md);line-height:1.6;margin-top:var(--space-3);">${esc(c.overview)}</p>`;

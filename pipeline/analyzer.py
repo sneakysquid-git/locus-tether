@@ -15,7 +15,7 @@ from prompts import SYSTEM_PROMPT, build_user_prompt
 
 log = logging.getLogger("omi.analyzer")
 
-EXPECTED_KEYS = {"title", "overview", "category", "emoji", "action_items", "key_facts", "mentioned_lists"}
+EXPECTED_KEYS = {"title", "overview", "category", "action_items", "key_facts", "mentioned_lists"}
 
 
 def analyze_transcript(transcript_text: str) -> dict:

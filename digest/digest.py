@@ -70,12 +70,11 @@ def render_markdown(target_date: date, analyses: list[dict], speech_coaching: Op
         lines.append("## Conversations")
         lines.append("")
         for a in analyses:
-            emoji = a.get("emoji", "")
             title = a.get("title", a["_stem"])
             category = a.get("category", "uncategorized")
             overview = a.get("overview", "")
 
-            lines.append(f"### {emoji} {title}")
+            lines.append(f"### {title}")
             lines.append(f"*Category: {category}*")
             lines.append("")
             lines.append(overview)
@@ -200,11 +199,11 @@ def render_html(
     # clickable (PDF internal links are universally reliable, unlike email).
     toc_entries = []
     for i, a in enumerate(analyses):
-        toc_entries.append((f"conv-{i}", f"{a.get('emoji', '')} {a.get('title', a.get('_stem', ''))}"))
+        toc_entries.append((f"conv-{i}", f"{a.get('title', a.get('_stem', ''))}"))
     for i, sc in enumerate(speech_coaching):
         titles_by_stem_early = {a.get("_stem", ""): a.get("title", a.get("_stem", "")) for a in analyses}
         label = titles_by_stem_early.get(sc.get("_stem", ""), sc.get("_stem", ""))
-        toc_entries.append((f"speech-{i}", f"🎤 {label} (speaking style)"))
+        toc_entries.append((f"speech-{i}", f"{label} (speaking style)"))
 
     if len(toc_entries) > 1:  # a TOC for one thing isn't worth showing
         parts.append('<h2 style="font-size: 15px; margin-top: 20px; color: #636e72;">Contents</h2>')
@@ -247,7 +246,6 @@ def render_html(
     if analyses:
         parts.append('<h2 style="font-size: 17px; margin-top: 28px;">Conversations</h2>')
         for i, a in enumerate(analyses):
-            emoji = a.get("emoji", "")
             title = esc(a.get("title", a.get("_stem", "")))
             category = a.get("category", "uncategorized")
             color = _CATEGORY_COLORS.get(category, _CATEGORY_COLORS["other"])
@@ -258,7 +256,7 @@ def render_html(
                 'margin-bottom: 12px;">'
             )
             parts.append(
-                f'<div style="font-size: 16px; font-weight: 600;">{emoji} {title}</div>'
+                f'<div style="font-size: 16px; font-weight: 600;">{title}</div>'
             )
             parts.append(
                 f'<span style="display: inline-block; background-color: {color}; color: #ffffff; '
