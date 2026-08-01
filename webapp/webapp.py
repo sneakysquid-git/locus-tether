@@ -383,7 +383,25 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .badge { display: inline-block; color: #ffffff; font-size: var(--text-xs); padding: var(--space-0) var(--space-2);
            border-radius: 10px; margin: var(--space-2) 0; }
   .todo-row { display: flex; align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid #21262d; }
-  .todo-row input { margin-right: var(--space-2); width: 18px; height: 18px; flex-shrink: 0; }
+  .todo-row input[type="checkbox"] {
+    appearance: none; -webkit-appearance: none;
+    margin-right: var(--space-2); width: 20px; height: 20px; flex-shrink: 0;
+    border: 2px solid #30363d; border-radius: 6px; background: #161b22;
+    cursor: pointer; position: relative; top: 2px;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+  }
+  .todo-row input[type="checkbox"]:checked {
+    background: #1f6feb; border-color: #1f6feb;
+  }
+  .todo-row input[type="checkbox"]:checked::after {
+    content: ""; position: absolute; left: 6px; top: 2px;
+    width: 5px; height: 10px;
+    border: solid #ffffff; border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+  }
+  .todo-row input[type="checkbox"]:focus-visible {
+    outline: 2px solid #58a6ff; outline-offset: 2px;
+  }
   .todo-row .desc { color: #e6edf3; }
   .todo-done { text-decoration: line-through; color: #6e7681; }
   .due { color: #ff9662; font-size: var(--text-sm); }

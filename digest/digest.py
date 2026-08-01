@@ -27,7 +27,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
 import config
 import data_store
-import integrations
 
 log = logging.getLogger("omi.digest")
 
@@ -154,7 +153,6 @@ _CATEGORY_COLORS = {
 def render_html(
     target_date: date,
     analyses: list[dict],
-    things_link: Optional[str] = None,
     speech_coaching: Optional[list[dict]] = None,
 ) -> str:
     """
@@ -244,14 +242,6 @@ def render_html(
                 "</div>"
             )
         parts.append("</div>")
-
-        if things_link:
-            parts.append(
-                '<p style="background-color: #f1f2f6; padding: 10px 14px; border-radius: 6px; '
-                'font-size: 13px; color: #2d3436;">'
-                "&#128206; See the attached file to add these to Things 3 "
-                "(open it on a Mac/iPhone/iPad with Things installed).</p>"
-            )
 
     # --- Per-conversation detail ---
     if analyses:
@@ -382,39 +372,11 @@ def render_pdf(html_body: str) -> Optional[bytes]:
         return None
 
 
-def build_things_attachment(things_link: str) -> str:
-    """
-    A tiny standalone HTML file with a button linking to Things. Meant to be
-    attached to the email (not embedded inline) — see send_email()'s
-    docstring for why: Gmail strips the href from any inline link using a
-    non-standard URL scheme like things:///, but respects it fine once the
-    HTML is opened as a local file outside Gmail's own rendering (e.g.
-    double-clicking the attachment on a Mac, or opening it in Files on iOS).
-    """
-    return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"></head>
-<body style="font-family: -apple-system, Helvetica, Arial, sans-serif; text-align: center; padding: 40px;">
-<p style="color: #636e72; margin-bottom: 20px;">Tap below to add today's action items to Things 3.</p>
-<a href="{things_link}" style="display: inline-block; padding: 14px 28px; background-color: #2d3436;
-color: #ffffff; text-decoration: none; border-radius: 8px; font-size: 16px;">Add to Things 3</a>
-</body></html>"""
-
-
-def send_email(target_date: date, markdown: str, html_body: str, things_link: Optional[str]) -> None:
+def send_email(target_date: date, markdown: str, html_body: str) -> None:
     """
     Emails the digest as a multipart/mixed message: an alternative
-    text+HTML body, plus (if there are any action items) a separate HTML
-    attachment for Things 3 import.
-
-    Why the Things link is a SEPARATE ATTACHMENT rather than a button
-    embedded directly in the HTML body: Gmail's HTML sanitizer strips the
-    href attribute entirely from any link using a non-standard URL scheme
-    like things:/// — this is a long-documented Gmail behavior, not
-    something specific to this email. An embedded button would always
-    render as inert plain text in Gmail specifically (Apple Mail is more
-    permissive, but Gmail is the common case). Opening the attachment
-    separately bypasses Gmail's live HTML rendering entirely — the browser
-    that opens the attachment handles the custom scheme normally.
+    text+HTML body, plus a PDF attachment (with a genuinely working table
+    of contents — see render_pdf's docstring).
 
     Does nothing if DIGEST_EMAIL_ENABLED is false. Raises on failure rather
     than swallowing errors — caller decides how to handle that (see main(),
@@ -456,13 +418,6 @@ def send_email(target_date: date, markdown: str, html_body: str, things_link: Op
     body.attach(MIMEText(html_body, "html", "utf-8"))
     msg.attach(body)
 
-    if things_link:
-        attachment = MIMEText(build_things_attachment(things_link), "html", "utf-8")
-        attachment.add_header(
-            "Content-Disposition", "attachment", filename=f"add-to-things-{target_date.isoformat()}.html"
-        )
-        msg.attach(attachment)
-
     pdf_bytes = render_pdf(html_body)
     if pdf_bytes:
         pdf_attachment = MIMEApplication(pdf_bytes, _subtype="pdf")
@@ -501,8 +456,7 @@ def main():
     analyses = load_day_analyses(target_date)
     speech_coaching = load_day_speech_coaching(target_date)
     markdown = render_markdown(target_date, analyses, speech_coaching)
-    things_link = integrations.build_things_link(analyses, target_date)
-    html_body = render_html(target_date, analyses, things_link, speech_coaching)
+    html_body = render_html(target_date, analyses, speech_coaching)
 
     out_path = config.DIGESTS_DIR / f"{target_date.isoformat()}.md"
     out_path.write_text(markdown, encoding="utf-8")
@@ -513,7 +467,7 @@ def main():
     print(f"Wrote: {out_path}")
 
     try:
-        send_email(target_date, markdown, html_body, things_link)
+        send_email(target_date, markdown, html_body)
         if config.DIGEST_EMAIL_ENABLED:
             print(f"Emailed digest to {config.DIGEST_EMAIL_TO}")
     except Exception as e:
