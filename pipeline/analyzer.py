@@ -20,6 +20,26 @@ EXPECTED_KEYS = {
     "decisions_made", "action_items", "key_facts", "mentioned_lists",
 }
 
+# Common placeholder phrasings the model uses instead of genuinely returning
+# an empty list when no real decision was reached — same anti-pattern as
+# the participants-padding bug, just showing up in a different field.
+# Deliberately a curated set of exact (normalized) matches rather than a
+# broad "starts with no/none" pattern, since a real decision could
+# legitimately start with a similar word (e.g. "No, they decided not to
+# renew...") and a blanket pattern would risk dropping real content.
+_PLACEHOLDER_NON_DECISION_PHRASES = {
+    "none", "none explicitly stated", "none stated", "none mentioned",
+    "no decisions made", "no decisions were made", "no decision was made",
+    "n/a", "not applicable", "nothing was decided", "no clear decisions",
+    "no decisions", "not stated", "no decisions were reached",
+    "no decision was reached",
+}
+
+
+def _is_placeholder_non_decision(text: str) -> bool:
+    normalized = text.strip().lower().rstrip(".")
+    return normalized in _PLACEHOLDER_NON_DECISION_PHRASES
+
 
 def analyze_transcript(transcript_text: str) -> dict:
     """
@@ -70,6 +90,9 @@ def analyze_transcript(transcript_text: str) -> dict:
     # detected speaker instead. Enforced here so the STORED analysis is
     # clean, not just whatever the API happens to filter on the way out.
     result["participants"] = [p for p in result.get("participants", []) if p.get("name")]
+    result["decisions_made"] = [
+        d for d in result.get("decisions_made", []) if not _is_placeholder_non_decision(d)
+    ]
 
     return result
 

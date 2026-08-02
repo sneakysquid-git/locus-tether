@@ -255,24 +255,74 @@ today with synthetic files rather than needing real hardware first.
 in-progress file transfers, survives crashes/reboots. **Status: done.**
 `watcher.py`, running as a systemd-managed Docker container.
 
-### Phase 3 — Turn audio into text
-**Goal:** accurate, fast, GPU-accelerated, entirely local transcription.
-**Status: done** — the hardest engineering lift in this project, since
-Thor's GPU architecture was new enough that no prebuilt software anywhere
-supported it. Required: finding the correct CUDA repo for this hardware
-(NVIDIA's generic public repo doesn't carry it), patching around a CMake
-architecture-lookup table that predates this GPU's existence, and clearing
-a Python packaging policy (PEP 668). All documented inline in
-`docker/Dockerfile`.
+### Phase 3 — Turn audio into text (and now, who said it)
+**Goal:** accurate, fast, GPU-accelerated, entirely local transcription —
+and, as of a later addition, knowing which of several distinct speakers
+said each part of it.
+
+**Status: done**, including a second real hardware saga on top of the
+original one:
+
+The original transcription build was the hardest engineering lift in this
+project, since Thor's GPU architecture was new enough that no prebuilt
+software anywhere supported it. Required: finding the correct CUDA repo for
+this hardware (NVIDIA's generic public repo doesn't carry it), patching
+around a CMake architecture-lookup table that predates this GPU's
+existence, and clearing a Python packaging policy (PEP 668). All documented
+inline in `docker/Dockerfile`.
+
+**Speaker diarization** (`pipeline/diarize.py`, WhisperX + pyannote.audio,
+layered on top of the existing transcription rather than replacing it) hit
+its own, different hardware saga — genuinely useful to document
+separately, since it's a different failure mode than the CTranslate2 one
+above:
+- Unlike CTranslate2 (deliberately built from source specifically to avoid
+  a PyTorch dependency), diarization's alignment/speaker-ID models are
+  PyTorch-native. Good news confirmed directly: PyTorch's official wheels
+  install cleanly via a bare `pip install torch` on this hardware and
+  correctly detect CUDA — no from-source build needed here, unlike
+  CTranslate2.
+- The real trap: installing `whisperx`/`pyannote.audio` afterward silently
+  downgrades torch to an older pinned version as a transitive dependency —
+  and that older version has no CUDA wheel for this architecture, so pip
+  silently falls back to CPU-only with no error. Fix: force-reinstall the
+  correct torch version with `--no-deps` after.
+- That fix alone isn't enough either — it leaves `torchaudio`/`torchvision`
+  behind at the old (now-mismatched) version, since they're tightly
+  version-locked to torch's exact build. Real fix: reinstall all three
+  together in one command so pip resolves a mutually compatible set.
+- A `condition_on_previous_text=False` change (an attempted mitigation for
+  a separate Whisper repetition-hallucination issue) turned out to trade
+  that rare failure mode for a worse, systematic one — capitalization/
+  punctuation degrading partway through longer recordings. Reverted to
+  Whisper's default after direct before/after comparison confirmed it.
+
+All three dependency issues, and the revert, are documented inline in
+`docker/Dockerfile` and `pipeline/config.py` at the point they were fixed.
 
 ### Phase 4 — Turn the transcript into something useful
 **Goal:** title, summary, category, action items (including appointments
 and reminders, with due dates parsed where mentioned), and key facts —
-matching the value Omi's cloud AI would produce. **Status: done.**
-`analyzer.py` + Ollama, using JSON-mode output for reliably structured
-results. Getting Ollama onto the GPU on this hardware needed a manual
-systemd override; MPS had to be disabled entirely after it was found to
-break Ollama's GPU discovery.
+matching the value Omi's cloud AI would produce, and since extended further
+(atmosphere/tone, named participants when actually stated, richer
+itemized key points, and decisions reached as their own distinct field) to
+handle genuinely substantive discussions and meetings, not just quick
+personal voice memos. **Status: done.** `analyzer.py` + Ollama, using
+JSON-mode output for reliably structured results. Getting Ollama onto the
+GPU on this hardware needed a manual systemd override; MPS had to be
+disabled entirely after it was found to break Ollama's GPU discovery.
+
+Once diarization (Phase 3) started feeding real speaker information into
+this step, real-hardware testing surfaced a genuinely useful lesson: the
+model handles a short contextual note ("this conversation had 4 distinct
+speakers") much better than being fed the whole transcript reformatted
+into per-speaker dialogue lines — the latter measurably degraded both
+content extraction and caused the model to fabricate placeholder
+"participants" entries, despite explicit instructions not to. Several
+fields (`participants`, `decisions_made`) also needed their "return an
+empty list when nothing applies" rule enforced in code rather than relying
+on prompt wording alone, after the model persistently padded them with
+placeholder entries regardless of instructions.
 
 ### Phase 5 — Surface it without having to go looking
 **Goal:** a daily digest that's actually pleasant to read, not just a data
