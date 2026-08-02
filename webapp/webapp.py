@@ -945,11 +945,28 @@ async function saveConversationEdits(stem) {
         description, due_date: due_date || null, owner: owner || null
       })),
   };
-  await fetch(`/api/conversations/${encodeURIComponent(stem)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
+
+  const saveBtn = document.querySelector('button[onclick^="saveConversationEdits"]');
+  if (saveBtn) { saveBtn.textContent = 'Saving...'; saveBtn.disabled = true; }
+
+  try {
+    const res = await fetch(`/api/conversations/${encodeURIComponent(stem)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const errorText = await res.text();
+      alert(`Save failed (server said: ${res.status}). Your edits are still here — nothing was lost. Details: ${errorText.slice(0, 200)}`);
+      if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.disabled = false; }
+      return;
+    }
+  } catch (err) {
+    alert(`Save failed — could not reach the server (${err.message}). Your edits are still here — nothing was lost.`);
+    if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.disabled = false; }
+    return;
+  }
+
   goDetail('conversations', stem);
 }
 
