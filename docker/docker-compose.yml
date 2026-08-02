@@ -109,6 +109,7 @@ services:
       - ${OMI_DATA_DIR}/archive:/app/archive
       - ${OMI_DATA_DIR}/transcripts:/app/transcripts
       - ${OMI_DATA_DIR}/failed:/app/failed
+      - ${OMI_DATA_DIR}/speaker_enrollment:/app/speaker_enrollment
 
       # Cache the Whisper model download across container restarts/rebuilds.
       - whisper-model-cache:/root/.cache/huggingface

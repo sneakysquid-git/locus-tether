@@ -197,9 +197,24 @@ def align_and_diarize(audio_path: Path, result: Dict[str, Any]) -> Dict[str, Any
         _clear_gpu_memory()
 
     # Stage: diarization (who spoke each segment)
+    speaker_embeddings = None
     try:
         diarize_model = _load_diarize_pipeline()
-        diarize_segments = diarize_model(audio)
+        # UNVERIFIED ON REAL HARDWARE: attempting to request embeddings
+        # alongside diarization, for speaker-identification matching (see
+        # speaker_profiles.py, #37). Based on whisperx-asr-service's own
+        # documented ASR_RETURN_SPEAKER_EMBEDDINGS pattern, but the exact
+        # call signature/return shape for THIS installed version hasn't
+        # been confirmed the way "token=" vs "use_auth_token=" needed
+        # correction earlier — falls back to plain diarization (no
+        # matching, same as before this existed) if this specific call
+        # shape doesn't work, rather than failing the whole pipeline.
+        try:
+            diarize_segments, speaker_embeddings = diarize_model(audio, return_embeddings=True)
+        except TypeError:
+            log.info("Diarization pipeline doesn't accept return_embeddings here — falling back to plain diarization (no speaker-identification matching this run)")
+            diarize_segments = diarize_model(audio)
+
         if hasattr(diarize_segments, "exclusive_speaker_diarization"):
             diarize_segments = diarize_segments.exclusive_speaker_diarization
         working = whisperx.assign_word_speakers(diarize_segments, working)
@@ -210,18 +225,97 @@ def align_and_diarize(audio_path: Path, result: Dict[str, Any]) -> Dict[str, Any
     finally:
         _clear_gpu_memory()
 
+    # Speaker identification (#37): match each detected SPEAKER_NN's
+    # embedding against enrolled voice profiles, relabeling with a real
+    # name wherever there's a confident match. An unmatched speaker just
+    # keeps its anonymous SPEAKER_NN label, exactly as before enrollment
+    # existed — this is purely additive, never a required step.
+    speaker_name_map = {}
+    if speaker_embeddings:
+        try:
+            import speaker_profiles
+
+            for speaker_id, embedding in speaker_embeddings.items():
+                matched_name = speaker_profiles.match_embedding(embedding)
+                if matched_name:
+                    speaker_name_map[speaker_id] = matched_name
+            if speaker_name_map:
+                log.info("Speaker identification matched: %s", speaker_name_map)
+        except Exception as e:
+            log.warning("Speaker identification failed (diarization labels unaffected): %s", e)
+
     # Reshape WhisperX's segment format back into our own stable schema
     # (start/end/text/speaker) — downstream code never needs to know
     # anything changed under the hood.
     new_segments = []
     for seg in working.get("segments", []):
+        speaker = seg.get("speaker")
         new_segments.append(
             {
                 "start": round(seg.get("start", 0.0), 2),
                 "end": round(seg.get("end", 0.0), 2),
                 "text": seg.get("text", "").strip(),
-                "speaker": seg.get("speaker"),
+                "speaker": speaker_name_map.get(speaker, speaker),
             }
         )
     result["segments"] = new_segments
     return result
+
+
+def extract_enrollment_embedding(audio_path: Path) -> Optional[list]:
+    """
+    For voice enrollment (#37): extracts a single voice "fingerprint" from
+    a (presumably single-speaker) sample recording. Runs the same
+    diarization pipeline as regular processing, requesting embeddings, and
+    returns whichever detected speaker had the most total speaking time —
+    a defensive choice in case the enrollment sample has a moment of
+    background noise or silence misdetected as a second brief "speaker".
+
+    Returns None if diarization/embeddings aren't available (disabled,
+    misconfigured, or the return_embeddings call shape doesn't work on
+    this installed version — see the same caveat in align_and_diarize).
+    """
+    if not ENABLE_DIARIZATION or not HF_TOKEN:
+        log.warning("Cannot extract enrollment embedding: diarization disabled or HF_TOKEN missing")
+        return None
+
+    try:
+        import whisperx
+    except ImportError:
+        log.warning("whisperx not installed — cannot extract enrollment embedding")
+        return None
+
+    audio = whisperx.load_audio(str(audio_path))
+
+    try:
+        diarize_model = _load_diarize_pipeline()
+        diarize_segments, speaker_embeddings = diarize_model(audio, return_embeddings=True)
+    except TypeError:
+        log.warning("This installed version doesn't support return_embeddings — cannot enroll a voice yet")
+        return None
+    except Exception as e:
+        log.warning("Enrollment embedding extraction failed: %s", e)
+        return None
+    finally:
+        _clear_gpu_memory()
+
+    if not speaker_embeddings:
+        return None
+
+    if len(speaker_embeddings) == 1:
+        return list(next(iter(speaker_embeddings.values())))
+
+    # Multiple detected "speakers" in what should be a single-speaker
+    # sample — pick whichever has the most total speaking time, on the
+    # assumption that brief secondary "speakers" are noise/silence
+    # artifacts, not a second real person.
+    try:
+        speaking_time: Dict[str, float] = {}
+        for _, row in diarize_segments.iterrows():
+            spk = row["speaker"]
+            speaking_time[spk] = speaking_time.get(spk, 0.0) + (row["end"] - row["start"])
+        dominant_speaker = max(speaking_time, key=speaking_time.get)
+        return list(speaker_embeddings[dominant_speaker])
+    except Exception as e:
+        log.warning("Could not determine dominant speaker in enrollment sample: %s", e)
+        return list(next(iter(speaker_embeddings.values())))

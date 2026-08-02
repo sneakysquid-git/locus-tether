@@ -39,6 +39,46 @@ def load_transcript(transcript_json_path: Path) -> dict:
     return json.loads(transcript_json_path.read_text(encoding="utf-8"))
 
 
+def filter_to_main_user(transcript: dict) -> dict:
+    """
+    Filters a transcript down to only the main user's own segments (#37,
+    voice enrollment) — critical for multi-speaker recordings, since
+    computing pace/filler-word/pause metrics across the WHOLE transcript
+    would blend everyone's speech patterns together, giving meaningless
+    feedback about the wearer's own speaking style rather than theirs
+    specifically.
+
+    "duration" gets recomputed as just the main user's own total speaking
+    time (sum of their segment durations), not the full recording's
+    wall-clock length — using the wrong duration here would understate
+    their actual words-per-minute pace, since they weren't necessarily
+    talking the entire time.
+
+    Falls back to the transcript UNCHANGED (the original single-speaker-
+    assuming behavior from before enrollment existed) if: no main user is
+    enrolled, or no segment in THIS specific recording has a speaker label
+    matching them (they weren't part of this conversation, or diarization
+    is disabled/failed/never ran) — deliberately the same behavior as
+    before, not a new failure mode.
+    """
+    import speaker_profiles
+
+    main_user = speaker_profiles.get_main_user()
+    segments = transcript.get("segments", [])
+
+    if not main_user or not any(seg.get("speaker") == main_user for seg in segments):
+        return transcript
+
+    main_user_segments = [seg for seg in segments if seg.get("speaker") == main_user]
+    total_speaking_time = sum(seg["end"] - seg["start"] for seg in main_user_segments)
+
+    filtered = dict(transcript)
+    filtered["segments"] = main_user_segments
+    filtered["text"] = " ".join(seg["text"] for seg in main_user_segments)
+    filtered["duration"] = total_speaking_time
+    return filtered
+
+
 def compute_pace(transcript: dict) -> dict:
     """
     Words per minute, from total word count and audio duration. A word

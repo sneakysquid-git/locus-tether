@@ -46,6 +46,12 @@ PROCESSING_DIR = Path(os.environ.get("OMI_PROCESSING_DIR", str(BASE_DIR / "proce
 ARCHIVE_DIR = Path(os.environ.get("OMI_ARCHIVE_DIR", str(BASE_DIR / "archive")))
 TRANSCRIPTS_DIR = Path(os.environ.get("OMI_TRANSCRIPTS_DIR", str(BASE_DIR / "transcripts")))
 FAILED_DIR = Path(os.environ.get("OMI_FAILED_DIR", str(BASE_DIR / "failed")))
+# Voice enrollment handoff (#37): webapp.py (host-side, no ML deps) writes an
+# audio sample + a JSON sidecar here; watcher.py (container-side, has
+# pyannote) picks it up, extracts an embedding, and stores it via
+# speaker_profiles.py. Same "shared directory as the handoff point" pattern
+# as inbox/processing/etc.
+ENROLLMENT_DIR = Path(os.environ.get("OMI_ENROLLMENT_DIR", str(BASE_DIR / "speaker_enrollment")))
 
 # --- File stability detection -------------------------------------------
 # Syncthing writes files incrementally (and uses .syncthing.<name>.tmp during
@@ -129,5 +135,5 @@ DIGEST_EMAIL_TO = os.environ.get("OMI_DIGEST_EMAIL_TO", "")
 
 
 def ensure_dirs() -> None:
-    for d in (INBOX_DIR, PROCESSING_DIR, ARCHIVE_DIR, TRANSCRIPTS_DIR, FAILED_DIR, DIGESTS_DIR):
+    for d in (INBOX_DIR, PROCESSING_DIR, ARCHIVE_DIR, TRANSCRIPTS_DIR, FAILED_DIR, DIGESTS_DIR, ENROLLMENT_DIR):
         d.mkdir(parents=True, exist_ok=True)

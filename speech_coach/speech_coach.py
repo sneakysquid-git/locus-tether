@@ -113,6 +113,17 @@ def main():
     transcript_path = Path(sys.argv[1])
     transcript = speech_metrics.load_transcript(transcript_path)
 
+    filtered_transcript = speech_metrics.filter_to_main_user(transcript)
+    if filtered_transcript is not transcript:
+        print(
+            f"Analyzing only the main user's speech "
+            f"({filtered_transcript['duration']:.0f}s of their own speaking time, "
+            f"out of {transcript.get('duration', 0):.0f}s total recording)."
+        )
+    else:
+        print("No main user enrolled (or not detected in this recording) — analyzing the full transcript, as before.")
+    transcript = filtered_transcript
+
     metrics = speech_metrics.analyze_speech_metrics(transcript)
     feedback = get_coaching_feedback(transcript, metrics)
 

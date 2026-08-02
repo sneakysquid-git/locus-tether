@@ -17,6 +17,7 @@ Run with:
     python3 webapp.py
 or as a persistent service — see systemd/webapp.service.
 """
+import json
 import logging
 import sys
 from datetime import date, timedelta
@@ -36,6 +37,7 @@ import data_store
 import integrations
 import todo_state
 import conversation_state
+import speaker_profiles
 
 log = logging.getLogger("omi.webapp")
 
@@ -427,6 +429,78 @@ def api_list_detail(list_name: str):
     return jsonify({"list_name": matching["list_name"], "items": open_items})
 
 
+# --- API: Speakers (#37, voice enrollment) --------------------------------
+
+@app.route("/api/speakers")
+def api_speakers():
+    return jsonify(speaker_profiles.list_profiles())
+
+
+@app.route("/api/speakers/enroll", methods=["POST"])
+def api_enroll_speaker():
+    """
+    Accepts a name, an optional is_main_user flag, and an audio file
+    (multipart form data — webapp.py has no ML dependencies itself, so it
+    just hands the sample off to watcher.py via a shared directory, the
+    same pattern as the main inbox). Returns immediately; enrollment
+    actually completes asynchronously once watcher.py processes it (see
+    /api/speakers/enroll-status below for polling).
+    """
+    name = (request.form.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+
+    audio_file = request.files.get("audio")
+    if audio_file is None or not audio_file.filename:
+        return jsonify({"error": "An audio sample is required"}), 400
+
+    is_main_user = request.form.get("is_main_user") == "true"
+
+    ext = Path(audio_file.filename).suffix or ".wav"
+    audio_path = config.ENROLLMENT_DIR / f"{name}{ext}"
+    sidecar_path = config.ENROLLMENT_DIR / f"{name}.json"
+
+    audio_file.save(str(audio_path))
+    sidecar_path.write_text(
+        json.dumps({"name": name, "is_main_user": is_main_user}), encoding="utf-8"
+    )
+
+    return jsonify({"status": "processing", "name": name})
+
+
+@app.route("/api/speakers/enroll-status/<path:name>")
+def api_enroll_status(name: str):
+    """
+    Lets the webapp poll after submitting an enrollment, since the actual
+    embedding extraction happens asynchronously in watcher.py (which has
+    the ML dependencies webapp.py deliberately doesn't).
+    """
+    profiles = speaker_profiles.list_profiles()
+    if any(p["name"] == name for p in profiles):
+        return jsonify({"status": "done"})
+
+    still_pending = any(
+        p.stem == name and p.suffix.lower() != ".json"
+        for p in config.ENROLLMENT_DIR.iterdir()
+    )
+    return jsonify({"status": "processing" if still_pending else "failed"})
+
+
+@app.route("/api/speakers/<path:name>/set-main", methods=["POST"])
+def api_set_main_speaker(name: str):
+    try:
+        speaker_profiles.set_main_user(name)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    return jsonify({"main_user": name})
+
+
+@app.route("/api/speakers/<path:name>", methods=["DELETE"])
+def api_delete_speaker(name: str):
+    speaker_profiles.delete_profile(name)
+    return jsonify({"deleted": name})
+
+
 # --- API: Feedback -----------------------------------------------------------
 
 @app.route("/api/feedback")
@@ -645,15 +719,23 @@ async function render(state) {
   if (state.tab === 'todos') return renderTodos();
   if (state.tab === 'feedback') return renderFeedbackList();
   if (state.tab === 'lists') return renderListsList();
+  if (state.tab === 'settings') return renderSettings();
 }
 
 function setHeader(title, showRefresh, showBack) {
   const backHtml = showBack
     ? `<button id="back-btn" onclick="history.back()">&#8592; Back</button>` : '';
+  const settingsHtml = showRefresh
+    ? `<button onclick="goTab('settings')" style="background:none;border:none;color:#8b949e;padding:4px 8px;margin-right:var(--space-2);" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-5px;">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>` : '';
   const refreshHtml = showRefresh
     ? `<button id="refresh-btn" onclick="render(currentState())">&#8635; Refresh</button>` : '';
   document.getElementById('header').innerHTML =
-    showBack ? backHtml : `<h1>${esc(title)} ${refreshHtml}</h1>`;
+    showBack ? backHtml : `<h1>${esc(title)} <span>${settingsHtml}${refreshHtml}</span></h1>`;
   document.getElementById('last-updated').textContent = showRefresh
     ? 'Last refreshed: ' + new Date().toLocaleTimeString() : '';
 }
@@ -1205,6 +1287,126 @@ async function renderListDetail(listName) {
   document.getElementById('content').innerHTML = html;
 }
 
+// --- Settings (#37: voice enrollment/recognition, more settings likely
+// to live here over time as the project grows) ---
+
+async function renderSettings() {
+  setHeader('', false, true);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const speakers = await (await fetch('/api/speakers')).json();
+
+  let html = '<h1 style="margin-top:var(--space-2);">Settings</h1>';
+  html += '<h2 style="font-size:var(--text-md);">Voice Recognition</h2>';
+  html += `<p style="font-size:var(--text-sm);color:#8b949e;">Enroll a voice once, and future conversations will show that
+    person's real name instead of an anonymous speaker label. Mark yourself as the
+    main user so speaking-style coaching analyzes only your own speech, not whoever
+    else is in the room.</p>`;
+
+  if (speakers.length) {
+    speakers.forEach(s => {
+      html += `<div class="list-row" style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <span style="font-weight:600;">${esc(s.name)}</span>
+          ${s.is_main_user ? '<span style="color:#58a6ff;font-size:var(--text-sm);"> (main user)</span>' : ''}
+        </div>
+        <div>
+          ${s.is_main_user ? '' : `<button onclick="setMainSpeaker('${esc(s.name)}')"
+              style="background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Set as main</button>`}
+          <button onclick="deleteSpeaker('${esc(s.name)}')"
+            style="background:#21262d;color:#f85149;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:var(--text-sm);">Delete</button>
+        </div>
+      </div>`;
+    });
+  } else {
+    html += '<p class="empty">No voices enrolled yet.</p>';
+  }
+
+  html += `
+    <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Enroll a New Voice</h2>
+    <p style="font-size:var(--text-sm);color:#8b949e;">Upload a short (10-30 second), clean recording of just this
+      person talking — background noise or other voices in the sample will make matching less reliable.</p>
+    <label style="font-size:var(--text-sm);color:#8b949e;display:block;margin-bottom:var(--space-1);">Name</label>
+    <input type="text" id="enroll-name" placeholder="e.g. Eric"
+      style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);box-sizing:border-box;">
+    <label style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3);font-size:var(--text-base);">
+      <input type="checkbox" id="enroll-is-main-user" style="width:auto;">
+      This is me (main user for speaking-style coaching)
+    </label>
+    <input type="file" id="enroll-audio" accept="audio/*"
+      style="width:100%;margin-bottom:var(--space-3);color:#e6edf3;">
+    <button onclick="submitEnrollment()"
+      style="width:100%;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Enroll</button>
+    <div id="enroll-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:#8b949e;"></div>
+  `;
+  document.getElementById('content').innerHTML = html;
+}
+
+async function submitEnrollment() {
+  const name = document.getElementById('enroll-name').value.trim();
+  const isMainUser = document.getElementById('enroll-is-main-user').checked;
+  const audioInput = document.getElementById('enroll-audio');
+  const statusEl = document.getElementById('enroll-status');
+
+  if (!name) { statusEl.textContent = 'Please enter a name.'; return; }
+  if (!audioInput.files.length) { statusEl.textContent = 'Please choose an audio file.'; return; }
+
+  const formData = new FormData();
+  formData.append('name', name);
+  formData.append('is_main_user', isMainUser ? 'true' : 'false');
+  formData.append('audio', audioInput.files[0]);
+
+  statusEl.textContent = 'Uploading...';
+  try {
+    const res = await fetch('/api/speakers/enroll', { method: 'POST', body: formData });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showErrorPanel('Enrollment failed', body.error || `Server returned ${res.status}`);
+      statusEl.textContent = '';
+      return;
+    }
+  } catch (err) {
+    showErrorPanel('Enrollment failed — could not reach the server', err.message);
+    statusEl.textContent = '';
+    return;
+  }
+
+  statusEl.textContent = 'Processing — extracting voice fingerprint, this can take a moment...';
+  pollEnrollmentStatus(name, statusEl);
+}
+
+async function pollEnrollmentStatus(name, statusEl) {
+  const res = await fetch(`/api/speakers/enroll-status/${encodeURIComponent(name)}`);
+  const data = await res.json();
+
+  if (data.status === 'done') {
+    statusEl.textContent = `${name} enrolled successfully.`;
+    setTimeout(() => renderSettings(), 1000);
+  } else if (data.status === 'failed') {
+    showErrorPanel(
+      'Enrollment did not complete',
+      `Could not extract a voice fingerprint for ${name}. This can happen if diarization is disabled, ` +
+      'the Hugging Face token is missing, or the installed pyannote/whisperx version does not support ' +
+      'the embeddings feature this relies on — check the pipeline logs (journalctl / docker compose logs) for specifics.'
+    );
+    statusEl.textContent = '';
+  } else {
+    setTimeout(() => pollEnrollmentStatus(name, statusEl), 2000);
+  }
+}
+
+async function setMainSpeaker(name) {
+  await fetch(`/api/speakers/${encodeURIComponent(name)}/set-main`, { method: 'POST' });
+  renderSettings();
+}
+
+async function deleteSpeaker(name) {
+  if (!confirm(`Remove the enrolled voice profile for ${name}? Their past conversations won't change, but future recordings will no longer recognize this voice.`)) {
+    return;
+  }
+  await fetch(`/api/speakers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  renderSettings();
+}
+
 async function toggleTodo(id, currentlyDone) {
   const isCheckingOn = !currentlyDone;
   const row = document.querySelector(`[data-todo-id="${CSS.escape(id)}"]`);
@@ -1241,7 +1443,7 @@ function parseInitialState() {
   const hash = window.location.hash.replace(/^#/, '');
   if (!hash) return { tab: 'today', detail: null };
   const [tab, rawDetail] = hash.split('/');
-  const validTabs = ['today', 'conversations', 'todos', 'feedback', 'lists'];
+  const validTabs = ['today', 'conversations', 'todos', 'feedback', 'lists', 'settings'];
   if (!validTabs.includes(tab)) return { tab: 'today', detail: null };
   return { tab, detail: rawDetail ? decodeURIComponent(rawDetail) : null };
 }
