@@ -495,7 +495,8 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .card { border: 1px solid #30363d; border-radius: 8px; padding: var(--space-3) var(--space-4);
           margin-bottom: var(--space-3); background: #161b22; }
   .list-row { border: 1px solid #30363d; border-radius: 8px; padding: var(--space-3) var(--space-3);
-              margin-bottom: var(--space-2); background: #161b22; }
+              margin-bottom: var(--space-2); background: #161b22;
+              -webkit-user-select: none; user-select: none; cursor: pointer; }
   .list-row:active { background: #1c2230; }
   .badge { display: inline-block; color: #ffffff; font-size: var(--text-xs); padding: var(--space-0) var(--space-2);
            border-radius: 10px; margin: var(--space-2) 0; }
@@ -523,7 +524,8 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .todo-done { text-decoration: line-through; color: #6e7681; }
   .due { color: #ff9662; font-size: var(--text-sm); }
   .empty { color: #8b949e; }
-  .source-label { color: #6e7681; font-size: var(--text-sm); }
+  .source-label { color: #6e7681; font-size: var(--text-sm);
+                  -webkit-user-select: none; user-select: none; cursor: pointer; }
   .date-label { color: #6e7681; font-size: var(--text-xs); }
 
   #tabbar { position: fixed; bottom: 0; left: 0; right: 0; background: #161b22;
@@ -946,7 +948,7 @@ function renderConversationEditForm(stem) {
 
     <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2);">
       <button onclick="saveConversationEdits('${stem}')" style="flex:1;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Save</button>
-      <button onclick="goDetail('conversations', '${stem}')" style="flex:1;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:12px;font-size:var(--text-base);">Cancel</button>
+      <button onclick="renderConversationDetail('${stem}')" style="flex:1;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:12px;font-size:var(--text-base);">Cancel</button>
     </div>
   `;
   document.getElementById('content').innerHTML = html;
@@ -1011,7 +1013,7 @@ Your edits are still here, nothing was lost.`);
     return;
   }
 
-  goDetail('conversations', stem);
+  renderConversationDetail(stem);
 }
 
 async function deleteConversation(stem) {
