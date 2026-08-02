@@ -266,47 +266,59 @@ def api_update_conversation(stem: str):
     a = data_store.load_analysis_by_stem(stem)
     if a is None:
         abort(404)
-    body = request.get_json(force=True) or {}
 
-    for field in ("title", "overview", "atmosphere", "category"):
-        if field in body:
-            a[field] = body[field]
+    try:
+        body = request.get_json(force=True) or {}
 
-    for field in ("key_facts", "key_points", "decisions_made"):
-        if field in body:
-            a[field] = [str(x).strip() for x in body[field] if str(x).strip()]
+        for field in ("title", "overview", "atmosphere", "category"):
+            if field in body:
+                a[field] = body[field]
 
-    if "participants" in body:
-        a["participants"] = [
-            {"name": p.get("name", "").strip(), "role": (p.get("role") or "").strip() or None}
-            for p in body["participants"]
-            if p.get("name", "").strip()
-        ]
+        for field in ("key_facts", "key_points", "decisions_made"):
+            if field in body:
+                a[field] = [str(x).strip() for x in body[field] if str(x).strip()]
 
-    if "action_items" in body:
-        # completed status is deliberately preserved from the existing
-        # stored item (by position) rather than accepted from the edit
-        # payload — that's todo_state's job exclusively, never overwritten
-        # by a content edit. A brand new item added during editing starts
-        # as not-completed.
-        existing = a.get("action_items", [])
-        new_items = []
-        for i, item in enumerate(body["action_items"]):
-            description = str(item.get("description", "")).strip()
-            if not description:
-                continue
-            completed = existing[i].get("completed", False) if i < len(existing) else False
-            new_items.append(
-                {
-                    "description": description,
-                    "due_date": (item.get("due_date") or "").strip() or None,
-                    "owner": (item.get("owner") or "").strip() or None,
-                    "completed": completed,
-                }
-            )
-        a["action_items"] = new_items
+        if "participants" in body:
+            a["participants"] = [
+                {"name": str(p.get("name") or "").strip(), "role": str(p.get("role") or "").strip() or None}
+                for p in body["participants"]
+                if str(p.get("name") or "").strip()
+            ]
 
-    data_store.save_analysis(stem, a)
+        if "action_items" in body:
+            # completed status is deliberately preserved from the existing
+            # stored item (by position) rather than accepted from the edit
+            # payload — that's todo_state's job exclusively, never
+            # overwritten by a content edit. A brand new item added during
+            # editing starts as not-completed.
+            existing = a.get("action_items", [])
+            new_items = []
+            for i, item in enumerate(body["action_items"]):
+                description = str(item.get("description") or "").strip()
+                if not description:
+                    continue
+                completed = False
+                if i < len(existing) and isinstance(existing[i], dict):
+                    completed = existing[i].get("completed", False)
+                new_items.append(
+                    {
+                        "description": description,
+                        "due_date": str(item.get("due_date") or "").strip() or None,
+                        "owner": str(item.get("owner") or "").strip() or None,
+                        "completed": completed,
+                    }
+                )
+            a["action_items"] = new_items
+
+        data_store.save_analysis(stem, a)
+    except Exception as e:
+        # Log the full traceback server-side (visible via journalctl -u
+        # webapp) AND return the actual reason to the client directly —
+        # a generic 500 page with no detail just means another round-trip
+        # of guessing before we can actually fix the real cause.
+        log.exception("Failed to save conversation edit for stem=%s", stem)
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
     return jsonify(_full_conversation(data_store.load_analysis_by_stem(stem)))
 
 
