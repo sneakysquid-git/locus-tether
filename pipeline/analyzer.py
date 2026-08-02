@@ -6,6 +6,7 @@ Used automatically by watcher.py after each successful transcription.
 """
 import json
 import logging
+import re
 import urllib.error
 import urllib.request
 
@@ -39,6 +40,41 @@ _PLACEHOLDER_NON_DECISION_PHRASES = {
 def _is_placeholder_non_decision(text: str) -> bool:
     normalized = text.strip().lower().rstrip(".")
     return normalized in _PLACEHOLDER_NON_DECISION_PHRASES
+
+
+def _find_unsupported_numbers(facts: list, source_text: str) -> list:
+    """
+    Logging-only sanity check, NOT a filter — flags any key_facts entry
+    containing a number that doesn't appear in the source transcript IN
+    THE SAME SHAPE (a plain count vs. a percentage). Deliberately checks
+    shape, not just raw substring presence: a naive substring check can't
+    tell "100" (a container count) from "100%" (a coverage percentage) —
+    since "100" trivially appears inside "100%" too — which is exactly the
+    fabrication pattern confirmed in a real test (see #40): the model took
+    "100% coverage" and turned it into a fabricated "100 containers."
+
+    Still deliberately NOT a filter: a number phrased differently in the
+    fact than in the transcript (e.g. "100" vs "one hundred") would still
+    be a false positive here, and silently dropping a legitimate fact is
+    worse than an occasional missed warning. This exists purely so we can
+    monitor, over real usage, how often this actually happens before
+    deciding whether stronger enforcement is worth the false-positive risk.
+    """
+    flagged = []
+    source_plain = source_text.replace(",", "")
+    for fact in facts:
+        fact_plain = fact.replace(",", "")
+        for match in re.finditer(r"\d+", fact_plain):
+            num = match.group()
+            is_percentage_in_fact = fact_plain[match.end():match.end() + 1] == "%"
+            if is_percentage_in_fact:
+                found = re.search(rf"(?<!\d){num}%", source_plain)
+            else:
+                found = re.search(rf"(?<!\d){num}(?!\d)(?!%)", source_plain)
+            if not found:
+                flagged.append(fact)
+                break
+    return flagged
 
 
 def analyze_transcript(transcript_text: str) -> dict:
@@ -93,6 +129,13 @@ def analyze_transcript(transcript_text: str) -> dict:
     result["decisions_made"] = [
         d for d in result.get("decisions_made", []) if not _is_placeholder_non_decision(d)
     ]
+
+    # Monitoring only (see #40) — logs, doesn't strip, since a naive number
+    # match risks false positives on facts phrased differently than the
+    # source (e.g. "100" vs "one hundred").
+    suspicious = _find_unsupported_numbers(result.get("key_facts", []), transcript_text)
+    if suspicious:
+        log.warning("key_facts may contain a number not found in the source transcript: %s", suspicious)
 
     return result
 
