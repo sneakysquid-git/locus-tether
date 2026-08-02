@@ -50,6 +50,7 @@ def _serialize_action_items(analysis: dict) -> list[dict]:
                 "id": item_id,
                 "description": item["description"],
                 "due_date": item.get("due_date"),
+                "owner": item.get("owner"),
                 "completed": todo_state.is_completed(item_id, item.get("completed", False)),
             }
         )
@@ -78,6 +79,10 @@ def _full_conversation(a: dict) -> dict:
         "title": a.get("title", stem),
         "category": a.get("category", "uncategorized"),
         "overview": a.get("overview", ""),
+        "atmosphere": a.get("atmosphere"),
+        "participants": a.get("participants", []),
+        "key_points": a.get("key_points", []),
+        "decisions_made": a.get("decisions_made", []),
         "key_facts": a.get("key_facts", []),
         "action_items": _serialize_action_items(a),
         "speech_coaching": speech,
@@ -476,6 +481,13 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// Small owner-attribution tag, shown next to an action item only when it
+// has one (multi-person meetings with named participants) — stays absent
+// entirely for personal-conversation action items, where owner is null.
+function ownerLabel(item) {
+  return item.owner ? ` <span style="color:#58a6ff;font-size:var(--text-sm);">(${esc(item.owner)})</span>` : '';
+}
+
 // --- Simple client-side router using the History API, so both the
 // on-page back button AND the phone's actual back gesture behave correctly. ---
 function currentState() {
@@ -552,7 +564,7 @@ async function renderToday() {
         <input type="checkbox" ${item.completed ? 'checked' : ''}
           onclick="toggleTodo('${item.id}', ${item.completed})">
         <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}
-        <span class="due">(due: ${esc(item.due_date)})</span>
+        <span class="due">(due: ${esc(item.due_date)})</span>${ownerLabel(item)}
         <span class="source-label"> — ${esc(item.source_title)}</span></span>
       </div>`;
     });
@@ -578,7 +590,7 @@ async function renderToday() {
       html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
           onclick="toggleTodo('${item.id}', ${item.completed})">
-        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}
+        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}
         <span class="source-label"> — ${esc(item.source_title)}</span></span>
       </div>`;
     });
@@ -661,6 +673,32 @@ async function renderConversationDetail(stem) {
     <span class="badge" style="background:${color};">${esc(c.category)}</span>
     <p style="font-size:var(--text-md);line-height:1.6;margin-top:var(--space-3);">${esc(c.overview)}</p>`;
 
+  if (c.atmosphere) {
+    html += `<p style="font-size:var(--text-sm);color:#8b949e;font-style:italic;margin-top:calc(-1 * var(--space-2));">${esc(c.atmosphere)}</p>`;
+  }
+
+  if (c.participants && c.participants.length) {
+    html += '<div style="margin-top:var(--space-2);">';
+    c.participants.forEach(p => {
+      const roleText = p.role ? ` — ${esc(p.role)}` : '';
+      html += `<span style="display:inline-block;background:#21262d;border:1px solid #30363d;border-radius:12px;
+        padding:2px 10px;margin:0 var(--space-1) var(--space-1) 0;font-size:var(--text-sm);">${esc(p.name)}${roleText}</span>`;
+    });
+    html += '</div>';
+  }
+
+  if (c.key_points && c.key_points.length) {
+    html += '<h2 style="font-size:var(--text-md);">Key points</h2><ol style="font-size:var(--text-base);">';
+    c.key_points.forEach(kp => { html += `<li style="margin-bottom:var(--space-2);">${esc(kp)}</li>`; });
+    html += '</ol>';
+  }
+
+  if (c.decisions_made && c.decisions_made.length) {
+    html += '<h2 style="font-size:var(--text-md);">Decisions made</h2><ul style="font-size:var(--text-base);">';
+    c.decisions_made.forEach(d => { html += `<li>${esc(d)}</li>`; });
+    html += '</ul>';
+  }
+
   if (c.key_facts.length) {
     html += '<h2 style="font-size:var(--text-md);">Key facts</h2><ul style="font-size:var(--text-base);">';
     c.key_facts.forEach(f => { html += `<li>${esc(f)}</li>`; });
@@ -674,7 +712,7 @@ async function renderConversationDetail(stem) {
       html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
           onclick="toggleTodo('${item.id}', ${item.completed})">
-        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}</span>
+        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}</span>
       </div>`;
     });
   }
@@ -709,7 +747,7 @@ async function renderTodos() {
     html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
       <input type="checkbox" ${item.completed ? 'checked' : ''}
         onclick="toggleTodo('${item.id}', ${item.completed})">
-      <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}
+      <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}
       <span class="source-label" onclick="event.stopPropagation(); goDetail('conversations','${esc(item.source_stem)}')">
         — ${esc(item.source_title)} (${esc(item.date)})</span></span>
     </div>`;
@@ -736,7 +774,7 @@ async function renderCompletedTodos() {
     const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
     html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
       <input type="checkbox" checked onclick="toggleTodo('${item.id}', true)">
-      <span class="desc todo-done">${esc(item.description)}${dueHtml}
+      <span class="desc todo-done">${esc(item.description)}${dueHtml}${ownerLabel(item)}
       <span class="source-label" onclick="event.stopPropagation(); goDetail('conversations','${esc(item.source_stem)}')">
         — ${esc(item.source_title)} (${esc(item.date)})</span></span>
     </div>`;

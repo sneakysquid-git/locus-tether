@@ -62,7 +62,9 @@ def render_markdown(target_date: date, analyses: list[dict], speech_coaching: Op
         for source_title, item in all_action_items:
             due = item.get("due_date")
             due_str = f" _(due: {due})_" if due else ""
-            lines.append(f"- [ ] {item['description']}{due_str} — from *{source_title}*")
+            owner = item.get("owner")
+            owner_str = f" _({owner})_" if owner else ""
+            lines.append(f"- [ ] {item['description']}{due_str}{owner_str} — from *{source_title}*")
         lines.append("")
 
     # --- Per-conversation detail
@@ -79,6 +81,33 @@ def render_markdown(target_date: date, analyses: list[dict], speech_coaching: Op
             lines.append("")
             lines.append(overview)
             lines.append("")
+
+            atmosphere = a.get("atmosphere")
+            if atmosphere:
+                lines.append(f"*{atmosphere}*")
+                lines.append("")
+
+            participants = a.get("participants", [])
+            if participants:
+                names = ", ".join(
+                    f"{p['name']} ({p['role']})" if p.get("role") else p["name"] for p in participants
+                )
+                lines.append(f"**Participants:** {names}")
+                lines.append("")
+
+            key_points = a.get("key_points", [])
+            if key_points:
+                lines.append("**Key points:**")
+                for i, kp in enumerate(key_points, 1):
+                    lines.append(f"{i}. {kp}")
+                lines.append("")
+
+            decisions_made = a.get("decisions_made", [])
+            if decisions_made:
+                lines.append("**Decisions made:**")
+                for d in decisions_made:
+                    lines.append(f"- {d}")
+                lines.append("")
 
             key_facts = a.get("key_facts", [])
             if key_facts:
@@ -232,11 +261,13 @@ def render_html(
                 if due
                 else ""
             )
+            owner = item.get("owner")
+            owner_html = f'<span style="color: #0984e3; font-size: 13px;"> ({esc(owner)})</span>' if owner else ""
             parts.append(
                 '<div style="display: flex; align-items: baseline; padding: 6px 0; '
                 'border-bottom: 1px solid #f1f2f6;">'
                 '<span style="font-size: 18px; margin-right: 10px; color: #636e72;">&#9744;</span>'
-                f'<span>{esc(item["description"])}{due_html} '
+                f'<span>{esc(item["description"])}{due_html}{owner_html} '
                 f'<span style="color: #b2bec3; font-size: 12px;">— {esc(source_title)}</span></span>'
                 "</div>"
             )
@@ -264,6 +295,36 @@ def render_html(
                 f"{esc(category)}</span>"
             )
             parts.append(f'<p style="font-size: 14px; line-height: 1.5;">{overview}</p>')
+
+            atmosphere = a.get("atmosphere")
+            if atmosphere:
+                parts.append(
+                    f'<p style="font-size: 13px; color: #636e72; font-style: italic; margin-top: -8px;">{esc(atmosphere)}</p>'
+                )
+
+            participants = a.get("participants", [])
+            if participants:
+                names = ", ".join(
+                    f"{esc(p['name'])} ({esc(p['role'])})" if p.get("role") else esc(p["name"])
+                    for p in participants
+                )
+                parts.append(f'<p style="font-size: 13px; color: #636e72;"><strong>Participants:</strong> {names}</p>')
+
+            key_points = a.get("key_points", [])
+            if key_points:
+                parts.append('<div style="font-size: 13px; margin-top: 8px;"><strong>Key points:</strong></div>')
+                parts.append('<ol style="font-size: 13px; margin: 4px 0; padding-left: 20px;">')
+                for kp in key_points:
+                    parts.append(f"<li>{esc(kp)}</li>")
+                parts.append("</ol>")
+
+            decisions_made = a.get("decisions_made", [])
+            if decisions_made:
+                parts.append('<div style="font-size: 13px; margin-top: 8px;"><strong>Decisions made:</strong></div>')
+                parts.append('<ul style="font-size: 13px; margin: 4px 0; padding-left: 20px;">')
+                for d in decisions_made:
+                    parts.append(f"<li>{esc(d)}</li>")
+                parts.append("</ul>")
 
             key_facts = a.get("key_facts", [])
             if key_facts:

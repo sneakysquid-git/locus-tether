@@ -20,17 +20,28 @@ SYSTEM_PROMPT = f"""You are analyzing a transcript of a real conversation or voi
 
 {{
   "title": "A short, specific title (5-8 words) capturing what this was about",
-  "overview": "A 2-4 sentence summary of what was discussed or said, written in third person, past tense",
+  "overview": "A summary of what was discussed or said, written in third person, past tense — length should MATCH THE ACTUAL SUBSTANCE of the conversation (see rules below), not a fixed length",
   "category": "One of: {', '.join(CATEGORIES)}",
+  "atmosphere": "One sentence describing the general mood/tone of the conversation (e.g. relaxed and casual, tense, focused and businesslike), or null if there isn't enough in the transcript to genuinely support a read on tone",
+  "participants": [
+    {{"name": "A participant's name, ONLY if actually stated in the conversation", "role": "Their role/title/company if stated, or null"}}
+  ],
+  "key_points": [
+    "For substantive meetings/discussions specifically: one specific, detailed point raised — richer and more granular than the overview paragraph, going beyond a one-line gloss. Leave this list EMPTY for casual conversations or brief voice memos where the overview alone already captures everything — do not pad this out just to seem thorough."
+  ],
+  "decisions_made": [
+    "A specific decision or conclusion the speaker(s) actually reached during this conversation"
+  ],
   "action_items": [
     {{
       "description": "A specific, actionable task, commitment, or reminder",
       "due_date": "A specific date/time mentioned for this item (e.g. 'Thursday', 'next Tuesday at 2pm'), or null if none was mentioned",
+      "owner": "The name of the person responsible for this, ONLY if this is a multi-person conversation where that's actually stated (e.g. 'Mike will follow up on X') — null for a personal voice memo or when it's simply the speaker's own task with no other named parties involved",
       "completed": false
     }}
   ],
   "key_facts": [
-    "A specific fact, decision, name, date, or number worth remembering later"
+    "A specific fact, name, date, or number worth remembering later — NOT a decision (those belong in decisions_made)"
   ],
   "mentioned_lists": [
     {{
@@ -42,7 +53,12 @@ SYSTEM_PROMPT = f"""You are analyzing a transcript of a real conversation or voi
 
 Rules:
 - Base everything strictly on the transcript. Do not invent details, names, or facts that are not present.
-- action_items includes not just literal to-dos, but also appointments, scheduled commitments, deadlines, and things the speaker asked to be reminded of — e.g. "dentist appointment next Tuesday" is an action item just as much as "call the insurance company" is. Don't only catch imperative-phrased tasks.
+- overview length should match the conversation's actual substance: a brief voice memo or quick to-do list genuinely only needs 2-4 sentences — don't pad it with invented detail just to sound thorough. A real discussion, meeting, or in-depth conversation deserves a fuller summary (a full paragraph or more) that actually captures the substance, not just a one-line gloss. Match depth to depth; don't force either direction.
+- atmosphere is about tone/mood, not content — how did it feel, not what was said. Only include a genuine read if the transcript actually supports one (tone of voice via word choice, pacing, expressed emotion); return null rather than guessing for a transcript that's too brief or neutral to tell.
+- participants: only include people whose name is actually stated in the transcript — never guess or invent a participant list from context alone. For a solo voice memo or a casual conversation where nobody is named, return an empty list. This is meant for real meetings with multiple identified people, not to force a list onto every conversation.
+- key_points is for genuinely substantive discussions/meetings — think of it as the overview broken into its component points, each with more specific detail than fits in a single summary paragraph (who raised what, specific technical/business details, reasoning given). This is DIFFERENT from key_facts (standalone facts/numbers to remember) and decisions_made (conclusions reached) — key_points is about capturing the actual substance and flow of a detailed discussion. For a short or casual conversation, leave this empty and let the overview alone do the work.
+- decisions_made captures conclusions actually reached ("we decided to go with X", "settled on Saturday") — distinct from action_items (things still to DO) and key_facts (details to remember that aren't themselves a decision). If no real decision was reached, return an empty list — do not manufacture one from a fact or preference that was just mentioned in passing.
+- action_items includes not just literal to-dos, but also appointments, scheduled commitments, deadlines, and things the speaker asked to be reminded of — e.g. "dentist appointment next Tuesday" is an action item just as much as "call the insurance company" is. Don't only catch imperative-phrased tasks. Only set "owner" to a specific name when this is clearly a multi-person conversation with named participants and it's actually clear who owns that item — don't guess an owner for a personal task just because other people are mentioned elsewhere in the conversation.
 - If there are no clear action items, return an empty list for action_items — do not force one.
 - If there are no standout facts worth remembering, return an empty list for key_facts.
 - mentioned_lists is for casually-mentioned things the speaker wants to check out or try later (movies, books, restaurants, products, etc.) — NOT tasks (those belong in action_items) and NOT facts to remember (those belong in key_facts). If nothing like this was mentioned, return an empty list.
