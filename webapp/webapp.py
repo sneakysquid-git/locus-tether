@@ -500,7 +500,8 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .list-row:active { background: #1c2230; }
   .badge { display: inline-block; color: #ffffff; font-size: var(--text-xs); padding: var(--space-0) var(--space-2);
            border-radius: 10px; margin: var(--space-2) 0; }
-  .todo-row { display: flex; align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid #21262d; }
+  .todo-row { display: flex; align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid #21262d;
+              -webkit-user-select: none; user-select: none; }
   .todo-row input[type="checkbox"] {
     appearance: none; -webkit-appearance: none;
     margin-right: var(--space-2); width: 20px; height: 20px; flex-shrink: 0;
@@ -677,9 +678,9 @@ async function renderToday() {
     html += '<h2 style="font-size:var(--text-md);">Due soon</h2>';
     data.due_soon.forEach(item => {
       html += `<div class="todo-row" style="border-left:3px solid #ff9662;padding-left:var(--space-2);"
-        data-todo-id="${esc(item.id)}">
+        data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
-          onclick="toggleTodo('${item.id}', ${item.completed})">
+          onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
         <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}
         <span class="due">(due: ${esc(item.due_date)})</span>${ownerLabel(item)}
         <span class="source-label"> — ${esc(item.source_title)}</span></span>
@@ -704,9 +705,9 @@ async function renderToday() {
     html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Action items</h2>';
     data.action_items.forEach(item => {
       const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
-      html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
+      html += `<div class="todo-row" data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
-          onclick="toggleTodo('${item.id}', ${item.completed})">
+          onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
         <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}
         <span class="source-label"> — ${esc(item.source_title)}</span></span>
       </div>`;
@@ -1044,12 +1045,11 @@ async function renderTodos() {
 
   items.forEach(item => {
     const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
-    html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
+    html += `<div class="todo-row" data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
       <input type="checkbox" ${item.completed ? 'checked' : ''}
-        onclick="toggleTodo('${item.id}', ${item.completed})">
+        onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
       <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}
-      <span class="source-label" onclick="event.stopPropagation(); goDetail('conversations','${esc(item.source_stem)}')">
-        — ${esc(item.source_title)} (${esc(item.date)})</span></span>
+      <span class="source-label"> — ${esc(item.source_title)} (${esc(item.date)})</span></span>
     </div>`;
   });
   document.getElementById('content').innerHTML = html;
