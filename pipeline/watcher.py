@@ -132,7 +132,8 @@ def process_one(path: Path) -> None:
     # errors and logs them rather than raising, so a bad/unreachable Ollama
     # call here never undoes the transcription success above.
     log.info("Analyzing: %s", processing_path.name)
-    analyzer.analyze_and_write(result["text"], stem)
+    analysis_text = transcribe.build_analysis_text(result)
+    analyzer.analyze_and_write(analysis_text, stem)
 
     shutil.move(str(processing_path), str(config.ARCHIVE_DIR / processing_path.name))
     log.info("Done: %s", processing_path.name)

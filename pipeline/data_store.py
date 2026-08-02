@@ -52,6 +52,26 @@ def load_analysis_by_stem(stem: str) -> Optional[dict]:
     return data
 
 
+def get_speaker_count(stem: str) -> Optional[int]:
+    """
+    Number of distinct speakers diarization detected for this conversation's
+    raw transcript, or None if the transcript doesn't exist, has no
+    segments, or diarization never ran/failed (no segment has a real
+    speaker label) — deliberately distinct from 0, since "diarization
+    wasn't run" and "diarization ran and found 1 speaker" are different
+    things worth being able to tell apart later if needed.
+    """
+    path = config.TRANSCRIPTS_DIR / f"{stem}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    speakers = {seg.get("speaker") for seg in data.get("segments", []) if seg.get("speaker")}
+    return len(speakers) if speakers else None
+
+
 def load_all_speech_coaching() -> list[dict]:
     """
     Every *.speech_coach.json in TRANSCRIPTS_DIR, most recent first (by the

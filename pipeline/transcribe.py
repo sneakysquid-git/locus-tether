@@ -91,6 +91,44 @@ def transcribe_file(audio_path: Path) -> Dict[str, Any]:
     return result
 
 
+def build_analysis_text(result: Dict[str, Any]) -> str:
+    """
+    Builds the text actually sent to the LLM for analysis — NOT necessarily
+    the same as result["text"]. If diarization succeeded (segments have
+    real speaker labels), formats as "SPEAKER_00: ...\\nSPEAKER_01: ..."
+    with consecutive same-speaker segments merged into one turn. This is
+    what lets the model actually recognize a multi-person conversation and
+    write about it that way (multiple participants, a group discussion)
+    instead of always defaulting to "the speaker" as if it were a single
+    person talking, regardless of how many distinct voices were actually
+    detected — which is exactly what it did before this existed, since it
+    never had any way to know otherwise.
+
+    Falls back to the flat, speaker-agnostic result["text"] when no segment
+    has a real speaker label (diarization disabled, or failed and fell back
+    softly) — same behavior as before this function existed.
+    """
+    segments = result.get("segments", [])
+    if not any(seg.get("speaker") for seg in segments):
+        return result.get("text", "")
+
+    lines = []
+    current_speaker = None
+    current_texts: list[str] = []
+    for seg in segments:
+        speaker = seg.get("speaker") or "UNKNOWN"
+        if speaker != current_speaker:
+            if current_texts:
+                lines.append(f"{current_speaker}: {' '.join(current_texts)}")
+            current_speaker = speaker
+            current_texts = [seg["text"]]
+        else:
+            current_texts.append(seg["text"])
+    if current_texts:
+        lines.append(f"{current_speaker}: {' '.join(current_texts)}")
+    return "\n".join(lines)
+
+
 def write_transcript(result: Dict[str, Any], stem: str) -> None:
     """Writes both a human-readable .txt and a structured .json transcript."""
     json_path = config.TRANSCRIPTS_DIR / f"{stem}.json"

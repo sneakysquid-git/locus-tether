@@ -80,6 +80,7 @@ def _full_conversation(a: dict) -> dict:
         "category": a.get("category", "uncategorized"),
         "overview": a.get("overview", ""),
         "atmosphere": a.get("atmosphere"),
+        "speaker_count": data_store.get_speaker_count(stem),
         "participants": a.get("participants", []),
         "key_points": a.get("key_points", []),
         "decisions_made": a.get("decisions_made", []),
@@ -668,10 +669,16 @@ async function renderConversationDetail(stem) {
   const c = await res.json();
   const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
 
-  let html = `<h1 style="margin-top:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</h1>
+  let html = `<h1 style="margin-top:var(--space-2);justify-content:flex-start;gap:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</h1>
     <div class="date-label" style="margin-bottom:var(--space-2);">${esc(c.date)}</div>
-    <span class="badge" style="background:${color};">${esc(c.category)}</span>
-    <p style="font-size:var(--text-md);line-height:1.6;margin-top:var(--space-3);">${esc(c.overview)}</p>`;
+    <span class="badge" style="background:${color};">${esc(c.category)}</span>`;
+
+  if (c.speaker_count) {
+    const label = c.speaker_count === 1 ? '1 speaker detected' : `${c.speaker_count} speakers detected`;
+    html += ` <span style="color:#8b949e;font-size:var(--text-sm);">${label}</span>`;
+  }
+
+  html += `<p style="font-size:var(--text-md);line-height:1.6;margin-top:var(--space-3);">${esc(c.overview)}</p>`;
 
   if (c.atmosphere) {
     html += `<p style="font-size:var(--text-sm);color:#8b949e;font-style:italic;margin-top:calc(-1 * var(--space-2));">${esc(c.atmosphere)}</p>`;
