@@ -136,9 +136,17 @@ RUN pip3 install --break-system-packages --no-cache-dir --no-deps faster-whisper
 # faster-whisper shadowing our CTranslate2 build above — same fix: force
 # the correct version back afterward with --no-deps so this reinstall
 # doesn't itself trigger another resolution cascade.
+# BUG CONFIRMED ON REAL HARDWARE (round 2): force-reinstalling ONLY torch
+# (see above) fixed the CPU-only problem, but left torchaudio/torchvision
+# behind at whatever OLDER version whisperx/pyannote originally pulled in —
+# these are tightly version-locked to torch's exact build (their compiled
+# .so files depend on torch's internal ABI), so a mismatched pairing throws
+# errors like "Could not load libtorchaudio.so" and torchvision circular-
+# import failures. Fix: reinstall all three together in one command, so pip
+# resolves a mutually-compatible set instead of fixing one in isolation.
 RUN pip3 install --break-system-packages --no-cache-dir torch \
     && pip3 install --break-system-packages --no-cache-dir whisperx pyannote.audio \
-    && pip3 install --break-system-packages --no-cache-dir --force-reinstall --no-deps torch
+    && pip3 install --break-system-packages --no-cache-dir --force-reinstall --no-deps torch torchaudio torchvision
 
 COPY pipeline/config.py pipeline/transcribe.py pipeline/watcher.py pipeline/prompts.py pipeline/analyzer.py pipeline/data_store.py pipeline/diarize.py ./
 COPY docker/entrypoint.sh /entrypoint.sh
