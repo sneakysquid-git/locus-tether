@@ -311,6 +311,15 @@ def api_update_conversation(stem: str):
             a["action_items"] = new_items
 
         data_store.save_analysis(stem, a)
+
+        updated = data_store.load_analysis_by_stem(stem)
+        if updated is None:
+            # The save above wrote the file successfully — this would only
+            # happen if reloading it immediately afterward somehow failed
+            # (a real, if unlikely, race/IO edge case). Report it clearly
+            # rather than crash on a bare None a line further down.
+            raise RuntimeError("Save appeared to succeed, but reloading the saved file failed")
+        response_body = _full_conversation(updated)
     except Exception as e:
         # Log the full traceback server-side (visible via journalctl -u
         # webapp) AND return the actual reason to the client directly —
@@ -319,7 +328,7 @@ def api_update_conversation(stem: str):
         log.exception("Failed to save conversation edit for stem=%s", stem)
         return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
 
-    return jsonify(_full_conversation(data_store.load_analysis_by_stem(stem)))
+    return jsonify(response_body)
 
 
 @app.route("/api/conversations/<path:stem>/archive", methods=["POST"])
