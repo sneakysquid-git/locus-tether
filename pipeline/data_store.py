@@ -52,6 +52,20 @@ def load_analysis_by_stem(stem: str) -> Optional[dict]:
     return data
 
 
+def save_analysis(stem: str, data: dict) -> None:
+    """
+    Overwrites a conversation's analysis.json with user-edited content —
+    unlike todo_state.json's separate-overlay design, a full content edit
+    is meant to become the new source of truth going forward, not sit
+    alongside the original LLM output. Strips internal _stem/_date keys
+    (those are computed at load time from the file itself, never meant to
+    be persisted back into it).
+    """
+    path = config.TRANSCRIPTS_DIR / f"{stem}.analysis.json"
+    to_write = {k: v for k, v in data.items() if not k.startswith("_")}
+    path.write_text(json.dumps(to_write, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 def get_speaker_count(stem: str) -> Optional[int]:
     """
     Number of distinct speakers diarization detected for this conversation's

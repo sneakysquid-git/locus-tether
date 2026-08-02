@@ -34,6 +34,7 @@ import config
 import data_store
 import integrations
 import todo_state
+import conversation_state
 
 app = Flask(__name__)
 
@@ -112,10 +113,18 @@ def _all_open_action_items() -> list[dict]:
     conversation's own detail view (see _full_conversation), since that's
     a historical record, not an active work list, and doesn't clutter
     anything by keeping them visible there.
+
+    Archived conversations are excluded too — "deleting" a conversation
+    from the webapp should also stop its still-open action items from
+    cluttering the active To-Dos list, consistent with archiving meaning
+    "fully out of the way" everywhere, not just the Conversations tab.
     """
+    archived = conversation_state.get_all_archived()
     items = []
     for a in data_store.load_all_analyses():
         source_stem = a.get("_stem", "")
+        if source_stem in archived:
+            continue
         source_title = a.get("title", source_stem)
         source_date = a.get("_date", "")
         for item in _serialize_action_items(a):
@@ -143,7 +152,8 @@ def _condensed_list(list_group: dict) -> dict:
 def api_today():
     today = date.today()
     tomorrow = today + timedelta(days=1)
-    analyses = data_store.load_day_analyses(today)
+    archived = conversation_state.get_all_archived()
+    analyses = [a for a in data_store.load_day_analyses(today) if a.get("_stem") not in archived]
     speech_coaching = data_store.load_day_speech_coaching(today)
 
     conversations = [
@@ -231,7 +241,8 @@ def api_today():
 
 @app.route("/api/conversations")
 def api_conversations():
-    analyses = data_store.load_all_analyses()
+    archived = conversation_state.get_all_archived()
+    analyses = [a for a in data_store.load_all_analyses() if a.get("_stem") not in archived]
     return jsonify([_condensed_conversation(a) for a in analyses])
 
 
@@ -241,6 +252,76 @@ def api_conversation_detail(stem: str):
     if a is None:
         abort(404)
     return jsonify(_full_conversation(a))
+
+
+@app.route("/api/conversations/<path:stem>", methods=["PUT"])
+def api_update_conversation(stem: str):
+    """
+    Full-content editing — unlike todo_state's separate overlay for
+    completion status, an edit here becomes the new source of truth
+    directly in the analysis file. Only touches fields actually present in
+    the request body, so a partial edit (e.g. just fixing the title)
+    doesn't require resending everything.
+    """
+    a = data_store.load_analysis_by_stem(stem)
+    if a is None:
+        abort(404)
+    body = request.get_json(force=True) or {}
+
+    for field in ("title", "overview", "atmosphere", "category"):
+        if field in body:
+            a[field] = body[field]
+
+    for field in ("key_facts", "key_points", "decisions_made"):
+        if field in body:
+            a[field] = [str(x).strip() for x in body[field] if str(x).strip()]
+
+    if "participants" in body:
+        a["participants"] = [
+            {"name": p.get("name", "").strip(), "role": (p.get("role") or "").strip() or None}
+            for p in body["participants"]
+            if p.get("name", "").strip()
+        ]
+
+    if "action_items" in body:
+        # completed status is deliberately preserved from the existing
+        # stored item (by position) rather than accepted from the edit
+        # payload — that's todo_state's job exclusively, never overwritten
+        # by a content edit. A brand new item added during editing starts
+        # as not-completed.
+        existing = a.get("action_items", [])
+        new_items = []
+        for i, item in enumerate(body["action_items"]):
+            description = str(item.get("description", "")).strip()
+            if not description:
+                continue
+            completed = existing[i].get("completed", False) if i < len(existing) else False
+            new_items.append(
+                {
+                    "description": description,
+                    "due_date": (item.get("due_date") or "").strip() or None,
+                    "owner": (item.get("owner") or "").strip() or None,
+                    "completed": completed,
+                }
+            )
+        a["action_items"] = new_items
+
+    data_store.save_analysis(stem, a)
+    return jsonify(_full_conversation(data_store.load_analysis_by_stem(stem)))
+
+
+@app.route("/api/conversations/<path:stem>/archive", methods=["POST"])
+def api_archive_conversation(stem: str):
+    if data_store.load_analysis_by_stem(stem) is None:
+        abort(404)
+    conversation_state.archive(stem)
+    return jsonify({"stem": stem, "archived": True})
+
+
+@app.route("/api/conversations/<path:stem>/unarchive", methods=["POST"])
+def api_unarchive_conversation(stem: str):
+    conversation_state.unarchive(stem)
+    return jsonify({"stem": stem, "archived": False})
 
 
 # --- API: To-Dos -------------------------------------------------------------
@@ -295,7 +376,12 @@ def api_toggle_todo(item_id: str):
 
 @app.route("/api/lists")
 def api_lists():
-    condensed = [_condensed_list(g) for g in data_store.aggregate_lists()]
+    archived = conversation_state.get_all_archived()
+    groups = []
+    for g in data_store.aggregate_lists():
+        g = {**g, "items": [i for i in g["items"] if i.get("source_stem") not in archived]}
+        groups.append(g)
+    condensed = [_condensed_list(g) for g in groups]
     condensed = [c for c in condensed if c["item_count"] > 0]  # fully-checked-off lists just disappear
     condensed.sort(key=lambda c: c["most_recent_date"], reverse=True)
     return jsonify(condensed)
@@ -309,7 +395,11 @@ def api_list_detail(list_name: str):
     )
     if matching is None:
         abort(404)
-    open_items = [i for i in matching["items"] if not todo_state.is_completed(i["id"], False)]
+    archived = conversation_state.get_all_archived()
+    open_items = [
+        i for i in matching["items"]
+        if not todo_state.is_completed(i["id"], False) and i.get("source_stem") not in archived
+    ]
     return jsonify({"list_name": matching["list_name"], "items": open_items})
 
 
@@ -667,10 +757,19 @@ async function renderConversationDetail(stem) {
     return;
   }
   const c = await res.json();
+  window._currentConversation = c;
   const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
 
   let html = `<h1 style="margin-top:var(--space-2);justify-content:flex-start;gap:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</h1>
-    <div class="date-label" style="margin-bottom:var(--space-2);">${esc(c.date)}</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);">
+      <div class="date-label">${esc(c.date)}</div>
+      <div>
+        <button onclick="renderConversationEditForm('${stem}')"
+          style="background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Edit</button>
+        <button onclick="deleteConversation('${stem}')"
+          style="background:#21262d;color:#f85149;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:var(--text-sm);">Delete</button>
+      </div>
+    </div>
     <span class="badge" style="background:${color};">${esc(c.category)}</span>`;
 
   if (c.speaker_count) {
@@ -729,6 +828,137 @@ async function renderConversationDetail(stem) {
   }
 
   document.getElementById('content').innerHTML = html;
+}
+
+// --- Conversation editing (#41: correct anything the LLM got wrong) ---
+// Generic helpers for the repeated "list of rows, each with 1-3 text
+// fields, add/remove buttons" pattern — reused for participants,
+// key_points, decisions_made, key_facts, and action_items rather than
+// writing near-duplicate code five times.
+
+function renderEditRows(rowsData, placeholders) {
+  let html = '';
+  rowsData.forEach(values => {
+    const inputs = values.map((v, i) =>
+      `<input type="text" placeholder="${esc(placeholders[i])}" value="${esc(v)}"
+        style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:6px 8px;margin-right:var(--space-2);">`
+    ).join('');
+    html += `<div class="edit-list-row" style="display:flex;margin-bottom:var(--space-2);">${inputs}
+      <button type="button" onclick="this.parentElement.remove()"
+        style="background:#3d1f1f;color:#f85149;border:none;border-radius:6px;padding:0 12px;flex-shrink:0;">×</button></div>`;
+  });
+  return html;
+}
+
+function addEditRow(containerId, placeholders) {
+  const container = document.getElementById(containerId);
+  const div = document.createElement('div');
+  div.className = 'edit-list-row';
+  div.style.cssText = 'display:flex;margin-bottom:var(--space-2);';
+  placeholders.forEach(ph => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = ph;
+    input.style.cssText = 'flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:6px 8px;margin-right:8px;';
+    div.appendChild(input);
+  });
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = '×';
+  btn.style.cssText = 'background:#3d1f1f;color:#f85149;border:none;border-radius:6px;padding:0 12px;flex-shrink:0;';
+  btn.onclick = () => div.remove();
+  div.appendChild(btn);
+  container.appendChild(div);
+}
+
+function gatherEditRows(containerId) {
+  const container = document.getElementById(containerId);
+  const rows = [];
+  container.querySelectorAll('.edit-list-row').forEach(row => {
+    rows.push(Array.from(row.querySelectorAll('input')).map(i => i.value.trim()));
+  });
+  return rows;
+}
+
+function renderConversationEditForm(stem) {
+  const c = window._currentConversation;
+  setHeader('', false, true);
+
+  const inputStyle = 'width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);box-sizing:border-box;';
+  const labelStyle = 'font-size:var(--text-sm);color:#8b949e;display:block;margin-bottom:var(--space-1);';
+  const addBtnStyle = 'background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:6px 12px;font-size:var(--text-sm);margin-bottom:var(--space-4);';
+
+  const html = `
+    <h1 style="margin-top:var(--space-2);">Edit Conversation</h1>
+
+    <label style="${labelStyle}">Title</label>
+    <input type="text" id="edit-title" value="${esc(c.title)}" style="${inputStyle}">
+
+    <label style="${labelStyle}">Overview</label>
+    <textarea id="edit-overview" rows="4" style="${inputStyle}">${esc(c.overview)}</textarea>
+
+    <label style="${labelStyle}">Atmosphere</label>
+    <input type="text" id="edit-atmosphere" value="${esc(c.atmosphere || '')}" style="${inputStyle}">
+
+    <h2 style="font-size:var(--text-md);">Participants</h2>
+    <div id="edit-participants">${renderEditRows((c.participants || []).map(p => [p.name, p.role || '']), ['Name', 'Role'])}</div>
+    <button type="button" onclick="addEditRow('edit-participants', ['Name', 'Role'])" style="${addBtnStyle}">+ Add participant</button>
+
+    <h2 style="font-size:var(--text-md);">Key points</h2>
+    <div id="edit-key_points">${renderEditRows((c.key_points || []).map(k => [k]), ['Key point'])}</div>
+    <button type="button" onclick="addEditRow('edit-key_points', ['Key point'])" style="${addBtnStyle}">+ Add key point</button>
+
+    <h2 style="font-size:var(--text-md);">Decisions made</h2>
+    <div id="edit-decisions_made">${renderEditRows((c.decisions_made || []).map(d => [d]), ['Decision'])}</div>
+    <button type="button" onclick="addEditRow('edit-decisions_made', ['Decision'])" style="${addBtnStyle}">+ Add decision</button>
+
+    <h2 style="font-size:var(--text-md);">Key facts</h2>
+    <div id="edit-key_facts">${renderEditRows((c.key_facts || []).map(f => [f]), ['Fact'])}</div>
+    <button type="button" onclick="addEditRow('edit-key_facts', ['Fact'])" style="${addBtnStyle}">+ Add fact</button>
+
+    <h2 style="font-size:var(--text-md);">Action items</h2>
+    <div id="edit-action_items">${renderEditRows((c.action_items || []).map(a => [a.description, a.due_date || '', a.owner || '']), ['Description', 'Due date', 'Owner'])}</div>
+    <button type="button" onclick="addEditRow('edit-action_items', ['Description', 'Due date', 'Owner'])" style="${addBtnStyle}">+ Add action item</button>
+
+    <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2);">
+      <button onclick="saveConversationEdits('${stem}')" style="flex:1;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Save</button>
+      <button onclick="goDetail('conversations', '${stem}')" style="flex:1;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:12px;font-size:var(--text-base);">Cancel</button>
+    </div>
+  `;
+  document.getElementById('content').innerHTML = html;
+}
+
+async function saveConversationEdits(stem) {
+  const payload = {
+    title: document.getElementById('edit-title').value.trim(),
+    overview: document.getElementById('edit-overview').value.trim(),
+    atmosphere: document.getElementById('edit-atmosphere').value.trim() || null,
+    participants: gatherEditRows('edit-participants')
+      .filter(([name]) => name)
+      .map(([name, role]) => ({ name, role: role || null })),
+    key_points: gatherEditRows('edit-key_points').map(([v]) => v).filter(v => v),
+    decisions_made: gatherEditRows('edit-decisions_made').map(([v]) => v).filter(v => v),
+    key_facts: gatherEditRows('edit-key_facts').map(([v]) => v).filter(v => v),
+    action_items: gatherEditRows('edit-action_items')
+      .filter(([description]) => description)
+      .map(([description, due_date, owner]) => ({
+        description, due_date: due_date || null, owner: owner || null
+      })),
+  };
+  await fetch(`/api/conversations/${encodeURIComponent(stem)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  goDetail('conversations', stem);
+}
+
+async function deleteConversation(stem) {
+  if (!confirm('Remove this conversation from your browsing views? The recording and transcript stay fully preserved on the Thor — this only hides it here, and can be undone.')) {
+    return;
+  }
+  await fetch(`/api/conversations/${encodeURIComponent(stem)}/archive`, { method: 'POST' });
+  goTab('conversations');
 }
 
 async function renderTodos() {
