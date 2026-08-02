@@ -62,6 +62,7 @@ def transcribe_file(audio_path: Path) -> Dict[str, Any]:
         str(audio_path),
         language=config.WHISPER_LANGUAGE,
         vad_filter=config.WHISPER_VAD_FILTER,
+        condition_on_previous_text=config.WHISPER_CONDITION_ON_PREVIOUS_TEXT,
     )
 
     segments = []

@@ -65,6 +65,15 @@ WHISPER_DEVICE = os.environ.get("OMI_WHISPER_DEVICE", "cuda")
 WHISPER_COMPUTE_TYPE = os.environ.get("OMI_WHISPER_COMPUTE_TYPE", "float16")
 WHISPER_LANGUAGE = os.environ.get("OMI_WHISPER_LANGUAGE")  # None = auto-detect
 WHISPER_VAD_FILTER = os.environ.get("OMI_WHISPER_VAD_FILTER", "true").lower() == "true"
+# Default false: a well-documented mitigation for Whisper's repetition-loop
+# hallucination failure mode (the model conditioning on its own prior
+# output as context, letting a small glitch snowball into repeated text).
+# Confirmed hitting this failure mode on real recordings on this hardware —
+# not tied to reusing a specific audio file, just Whisper's known behavior
+# firing somewhat unpredictably run to run.
+WHISPER_CONDITION_ON_PREVIOUS_TEXT = os.environ.get(
+    "OMI_WHISPER_CONDITION_ON_PREVIOUS_TEXT", "false"
+).lower() == "true"
 
 # --- Phase 1 diarization (speaker labels) ---------------------------------
 # See pipeline/diarize.py for the actual integration. Deliberately optional

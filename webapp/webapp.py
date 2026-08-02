@@ -81,7 +81,7 @@ def _full_conversation(a: dict) -> dict:
         "overview": a.get("overview", ""),
         "atmosphere": a.get("atmosphere"),
         "speaker_count": data_store.get_speaker_count(stem),
-        "participants": a.get("participants", []),
+        "participants": [p for p in a.get("participants", []) if p.get("name")],
         "key_points": a.get("key_points", []),
         "decisions_made": a.get("decisions_made", []),
         "key_facts": a.get("key_facts", []),
