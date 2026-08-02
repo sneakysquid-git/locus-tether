@@ -949,6 +949,24 @@ function renderConversationEditForm(stem) {
   document.getElementById('content').innerHTML = html;
 }
 
+// Native alert() boxes can't be resized or scrolled — that's entirely
+// controlled by the OS/browser, not something CSS/JS can touch. This is a
+// real in-page panel instead, so a long error is actually fully readable.
+function showErrorPanel(title, fullText) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;padding:var(--space-4);';
+  overlay.innerHTML = `
+    <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;max-width:100%;max-height:80vh;
+      display:flex;flex-direction:column;padding:var(--space-4);">
+      <h2 style="font-size:var(--text-md);color:#f85149;margin-top:0;">${esc(title)}</h2>
+      <pre style="overflow-y:auto;white-space:pre-wrap;word-break:break-word;background:#0d1117;border:1px solid #30363d;
+        border-radius:6px;padding:var(--space-2);font-size:var(--text-sm);color:#e6edf3;flex:1;margin:0 0 var(--space-3) 0;">${esc(fullText)}</pre>
+      <button id="error-panel-dismiss" style="background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:10px;font-size:var(--text-base);">Dismiss</button>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('error-panel-dismiss').onclick = () => overlay.remove();
+}
+
 async function saveConversationEdits(stem) {
   const payload = {
     title: document.getElementById('edit-title').value.trim(),
@@ -978,12 +996,14 @@ async function saveConversationEdits(stem) {
     });
     if (!res.ok) {
       const errorText = await res.text();
-      alert(`Save failed (server said: ${res.status}). Your edits are still here — nothing was lost. Details: ${errorText.slice(0, 200)}`);
+      showErrorPanel('Save failed (server said: ' + res.status + ') — your edits are still here, nothing was lost', errorText);
       if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.disabled = false; }
       return;
     }
   } catch (err) {
-    alert(`Save failed — could not reach the server (${err.message}). Your edits are still here — nothing was lost.`);
+    showErrorPanel('Save failed — could not reach the server', `${err.message}
+
+Your edits are still here, nothing was lost.`);
     if (saveBtn) { saveBtn.textContent = 'Save'; saveBtn.disabled = false; }
     return;
   }
