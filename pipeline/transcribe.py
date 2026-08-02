@@ -95,39 +95,34 @@ def transcribe_file(audio_path: Path) -> Dict[str, Any]:
 def build_analysis_text(result: Dict[str, Any]) -> str:
     """
     Builds the text actually sent to the LLM for analysis — NOT necessarily
-    the same as result["text"]. If diarization succeeded (segments have
-    real speaker labels), formats as "SPEAKER_00: ...\\nSPEAKER_01: ..."
-    with consecutive same-speaker segments merged into one turn. This is
-    what lets the model actually recognize a multi-person conversation and
-    write about it that way (multiple participants, a group discussion)
-    instead of always defaulting to "the speaker" as if it were a single
-    person talking, regardless of how many distinct voices were actually
-    detected — which is exactly what it did before this existed, since it
-    never had any way to know otherwise.
+    the same as result["text"] unchanged.
 
-    Falls back to the flat, speaker-agnostic result["text"] when no segment
-    has a real speaker label (diarization disabled, or failed and fell back
-    softly) — same behavior as before this function existed.
+    Deliberately keeps the original flowing prose (result["text"]) as the
+    actual body, rather than reformatting into per-line "SPEAKER_00: ...
+    SPEAKER_01: ..." dialogue — real-hardware testing showed that full
+    reformatting caused two regressions: key_points extraction quality
+    dropped noticeably, and the model started hallucinating placeholder
+    "participants" entries (null name, matching the speaker count) that
+    the prompt explicitly says not to produce. The flowing-prose version
+    consistently extracted richer, better content in direct comparison.
+
+    Instead, just prepends a short, minimal context note on how many
+    distinct speakers were detected when there's more than one — enough
+    for the model to correctly frame the overview as a multi-person
+    conversation ("the group discussed...") without restructuring the
+    whole input into a format that seems to distract it from actually
+    extracting content.
+
+    Falls back to the flat text unchanged when no segment has a real
+    speaker label (diarization disabled, or failed and fell back softly).
     """
     segments = result.get("segments", [])
-    if not any(seg.get("speaker") for seg in segments):
-        return result.get("text", "")
+    speakers = {seg.get("speaker") for seg in segments if seg.get("speaker")}
+    text = result.get("text", "")
 
-    lines = []
-    current_speaker = None
-    current_texts: list[str] = []
-    for seg in segments:
-        speaker = seg.get("speaker") or "UNKNOWN"
-        if speaker != current_speaker:
-            if current_texts:
-                lines.append(f"{current_speaker}: {' '.join(current_texts)}")
-            current_speaker = speaker
-            current_texts = [seg["text"]]
-        else:
-            current_texts.append(seg["text"])
-    if current_texts:
-        lines.append(f"{current_speaker}: {' '.join(current_texts)}")
-    return "\n".join(lines)
+    if len(speakers) > 1:
+        return f"[This conversation had {len(speakers)} distinct speakers.]\n\n{text}"
+    return text
 
 
 def write_transcript(result: Dict[str, Any], stem: str) -> None:

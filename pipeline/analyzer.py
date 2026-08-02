@@ -64,6 +64,13 @@ def analyze_transcript(transcript_text: str) -> dict:
     if missing:
         raise RuntimeError(f"Model output missing expected keys: {missing}\nFull output: {result}")
 
+    # Defensive cleanup, not just prompt engineering: despite explicit
+    # instructions to return an empty list when nobody is named, this model
+    # persistently pads "participants" with one null-name placeholder per
+    # detected speaker instead. Enforced here so the STORED analysis is
+    # clean, not just whatever the API happens to filter on the way out.
+    result["participants"] = [p for p in result.get("participants", []) if p.get("name")]
+
     return result
 
 

@@ -65,14 +65,17 @@ WHISPER_DEVICE = os.environ.get("OMI_WHISPER_DEVICE", "cuda")
 WHISPER_COMPUTE_TYPE = os.environ.get("OMI_WHISPER_COMPUTE_TYPE", "float16")
 WHISPER_LANGUAGE = os.environ.get("OMI_WHISPER_LANGUAGE")  # None = auto-detect
 WHISPER_VAD_FILTER = os.environ.get("OMI_WHISPER_VAD_FILTER", "true").lower() == "true"
-# Default false: a well-documented mitigation for Whisper's repetition-loop
-# hallucination failure mode (the model conditioning on its own prior
-# output as context, letting a small glitch snowball into repeated text).
-# Confirmed hitting this failure mode on real recordings on this hardware —
-# not tied to reusing a specific audio file, just Whisper's known behavior
-# firing somewhat unpredictably run to run.
+# REVERTED to Whisper's own default (true) after real-hardware testing showed
+# disabling this traded rare repetition-loop hallucinations for a worse,
+# systematic problem: capitalization/punctuation quality degrading partway
+# through longer recordings (confirmed via direct before/after transcript
+# comparison — this setting governs how much sentence-boundary context
+# carries forward between segments). Kept configurable in case a future,
+# more targeted mitigation is worth revisiting (e.g. compression_ratio_
+# threshold/logprob_threshold, which target detecting bad segments
+# specifically rather than disabling context conditioning broadly).
 WHISPER_CONDITION_ON_PREVIOUS_TEXT = os.environ.get(
-    "OMI_WHISPER_CONDITION_ON_PREVIOUS_TEXT", "false"
+    "OMI_WHISPER_CONDITION_ON_PREVIOUS_TEXT", "true"
 ).lower() == "true"
 
 # --- Phase 1 diarization (speaker labels) ---------------------------------
