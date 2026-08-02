@@ -17,6 +17,7 @@ Run with:
     python3 webapp.py
 or as a persistent service — see systemd/webapp.service.
 """
+import logging
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -35,6 +36,8 @@ import data_store
 import integrations
 import todo_state
 import conversation_state
+
+log = logging.getLogger("omi.webapp")
 
 app = Flask(__name__)
 
