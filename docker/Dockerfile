@@ -127,8 +127,18 @@ RUN pip3 install --break-system-packages --no-cache-dir --no-deps faster-whisper
 # Deliberately a separate, optional layer: set ENABLE_DIARIZATION=false (see
 # docker-compose.yml) to skip this entirely — useful on smaller GPUs where
 # the added ~4GB isn't available. See HARDWARE.md.
+# BUG CONFIRMED ON REAL HARDWARE: installing whisperx/pyannote.audio below
+# silently downgrades torch to an older pinned version as a transitive
+# dependency (2.13.0+cu130 -> 2.8.0+cpu observed) — that older version
+# apparently has no CUDA-enabled build available for this architecture on
+# standard PyPI, so pip falls back to CPU-only to satisfy the constraint,
+# with no error or obvious warning. Exact same class of problem as
+# faster-whisper shadowing our CTranslate2 build above — same fix: force
+# the correct version back afterward with --no-deps so this reinstall
+# doesn't itself trigger another resolution cascade.
 RUN pip3 install --break-system-packages --no-cache-dir torch \
-    && pip3 install --break-system-packages --no-cache-dir whisperx pyannote.audio
+    && pip3 install --break-system-packages --no-cache-dir whisperx pyannote.audio \
+    && pip3 install --break-system-packages --no-cache-dir --force-reinstall --no-deps torch
 
 COPY pipeline/config.py pipeline/transcribe.py pipeline/watcher.py pipeline/prompts.py pipeline/analyzer.py pipeline/data_store.py pipeline/diarize.py ./
 COPY docker/entrypoint.sh /entrypoint.sh

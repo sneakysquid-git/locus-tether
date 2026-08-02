@@ -137,9 +137,13 @@ def _load_diarize_pipeline():
         with _model_load_lock:
             if _diarize_pipeline is None:
                 log.info("Loading diarization pipeline: pyannote/speaker-diarization-community-1")
+                # Parameter is "token=", not "use_auth_token=" — confirmed via
+                # inspect.signature() against the actual installed version on
+                # real hardware; whisperx's own docs/examples online may show
+                # the older name, which no longer exists in this version.
                 _diarize_pipeline = DiarizationPipeline(
                     model_name="pyannote/speaker-diarization-community-1",
-                    use_auth_token=HF_TOKEN,
+                    token=HF_TOKEN,
                     device=torch.device(DEVICE),
                 )
     _diarize_pipeline_last_used = time.time()
