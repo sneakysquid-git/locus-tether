@@ -522,7 +522,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
     outline: 2px solid #58a6ff; outline-offset: 2px;
   }
   .todo-row .desc { color: #e6edf3; }
-  .todo-done { text-decoration: line-through; color: #6e7681; }
+  .todo-done { text-decoration: line-through; color: #6e7681; transition: color 0.3s ease; }
   .due { color: #ff9662; font-size: var(--text-sm); }
   .empty { color: #8b949e; }
   .source-label { color: #6e7681; font-size: var(--text-sm);
@@ -1206,16 +1206,33 @@ async function renderListDetail(listName) {
 }
 
 async function toggleTodo(id, currentlyDone) {
+  const isCheckingOn = !currentlyDone;
+  const row = document.querySelector(`[data-todo-id="${CSS.escape(id)}"]`);
+
+  if (isCheckingOn && row) {
+    // Instant visual confirmation the tap registered, before the API call
+    // even resolves — the item then sits struck-through for a moment
+    // (it now genuinely lives in Completed) rather than vanishing the
+    // instant you tap it.
+    const desc = row.querySelector('.desc');
+    if (desc) desc.classList.add('todo-done');
+    const checkbox = row.querySelector('input[type="checkbox"]');
+    if (checkbox) checkbox.checked = true;
+  }
+
   await fetch(`/api/todo/${encodeURIComponent(id)}/toggle`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({current_default: currentlyDone})
   });
-  // Re-render (not just patch in place) so an item that should now disappear
-  // from view — completed items leaving the open list, un-completed items
-  // leaving the Completed view — actually does so immediately, rather than
-  // sitting there crossed-out until the next manual refresh.
-  render(currentState());
+
+  if (isCheckingOn) {
+    setTimeout(() => render(currentState()), 1500);
+  } else {
+    // Unchecking (e.g. from the Completed view) still re-renders
+    // immediately — no reason to delay something reappearing.
+    render(currentState());
+  }
 }
 
 // Initial load: parse the URL hash if present (e.g. a bookmark or restored
