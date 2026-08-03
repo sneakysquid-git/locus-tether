@@ -115,7 +115,7 @@ sast:
 secret_detection:
   stage: security
 
-dependency_scanning:
+dependency-scanning:
   stage: security
 
 container_scanning:
