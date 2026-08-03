@@ -46,7 +46,7 @@ def get_coaching_feedback(transcript: dict, metrics: dict) -> dict:
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=300) as resp:  # noqa: S310 — scheme validated in config.py
             body = json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as e:
         raise RuntimeError(f"Could not reach Ollama at {config.OLLAMA_HOST}: {e}") from e

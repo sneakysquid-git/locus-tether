@@ -89,7 +89,7 @@ def _ensure_eviction_thread() -> None:
 
 
 def _eviction_loop() -> None:
-    global _diarize_pipeline, _diarize_pipeline_last_used
+    global _diarize_pipeline
     while True:
         time.sleep(MODEL_EVICTION_INTERVAL_SECONDS)
         now = time.time()
@@ -212,7 +212,10 @@ def align_and_diarize(audio_path: Path, result: Dict[str, Any]) -> Dict[str, Any
         try:
             diarize_segments, speaker_embeddings = diarize_model(audio, return_embeddings=True)
         except TypeError:
-            log.info("Diarization pipeline doesn't accept return_embeddings here — falling back to plain diarization (no speaker-identification matching this run)")
+            log.info(
+                "Diarization pipeline doesn't accept return_embeddings here — "
+                "falling back to plain diarization (no speaker-identification matching this run)"
+            )
             diarize_segments = diarize_model(audio)
 
         if hasattr(diarize_segments, "exclusive_speaker_diarization"):

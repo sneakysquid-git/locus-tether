@@ -117,6 +117,11 @@ AUTO_SPEECH_COACHING_ENABLED = os.environ.get("OMI_AUTO_SPEECH_COACHING_ENABLED"
 # network_mode: host, which is what makes "localhost" here actually resolve
 # to the host's Ollama server rather than the container's own loopback.
 OLLAMA_HOST = os.environ.get("OMI_OLLAMA_HOST", "http://localhost:11434")
+if not OLLAMA_HOST.startswith(("http://", "https://")):
+    # Operator-configurable via OMI_OLLAMA_HOST, not always guaranteed to be
+    # the safe hardcoded default — validated once here rather than at every
+    # call site that opens a request against it (analyzer.py, speech_coach.py).
+    raise ValueError(f"OMI_OLLAMA_HOST must start with http:// or https://, got: {OLLAMA_HOST!r}")
 OLLAMA_MODEL = os.environ.get("OMI_OLLAMA_MODEL", "llama3.1:8b")
 # If analysis fails (Ollama down, bad JSON, etc.), should the pipeline still
 # keep the transcript? Yes, always — a transcription success is valuable on

@@ -1,0 +1,24 @@
+[flake8]
+max-line-length = 120
+exclude = venv,.git,__pycache__
+
+# Deliberate, documented exceptions to the defaults above — not blanket
+# suppressions. Each one corresponds to a real, intentional pattern in
+# this codebase rather than an excuse to skip real lint findings:
+#
+# E402 (module level import not at top of file): digest.py, speech_coach.py,
+# and webapp.py all need `sys.path.insert(...)` executed BEFORE importing
+# sibling-directory modules (config.py, pipeline/ modules) — the import
+# genuinely cannot move to the top of the file without breaking the path
+# setup it depends on. This is intentional, not disorganized.
+#
+# E501 (line too long): prompts.py is natural-language LLM instruction
+# text — wrapping prose to fit an arbitrary column limit doesn't improve
+# it, and risks awkward mid-sentence breaks. webapp.py contains large
+# inline HTML/JS template literals, which read better as complete lines
+# than force-wrapped across several.
+per-file-ignores =
+    digest/digest.py:E402
+    speech_coach/speech_coach.py:E402
+    webapp/webapp.py:E402,E501
+    pipeline/prompts.py:E501

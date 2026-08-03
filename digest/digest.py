@@ -12,7 +12,6 @@ Usage:
     python3 digest.py 2026-07-29     # a specific date (local time)
 """
 import html
-import json
 import logging
 import smtplib
 import sys
@@ -299,9 +298,8 @@ def render_html(
 
             atmosphere = a.get("atmosphere")
             if atmosphere:
-                parts.append(
-                    f'<p style="font-size: 13px; color: #636e72; font-style: italic; margin-top: -8px;">{esc(atmosphere)}</p>'
-                )
+                style = "font-size: 13px; color: #636e72; font-style: italic; margin-top: -8px;"
+                parts.append(f'<p style="{style}">{esc(atmosphere)}</p>')
 
             participants = a.get("participants", [])
             if participants:

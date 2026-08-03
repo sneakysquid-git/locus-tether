@@ -23,7 +23,13 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request
+from flask import Flask, abort, jsonify, request, send_file
+import io
+import shutil
+import subprocess  # noqa: S404 — see the one call site below for why this is safe
+import urllib.error
+import urllib.request
+import zipfile
 
 # pipeline/ holds config.py, data_store.py, integrations.py — shared core
 # modules used by webapp.py, digest.py, and speech_coach.py alike. Added to
@@ -31,6 +37,7 @@ from flask import Flask, abort, jsonify, request
 # imports) so this script keeps working the same simple way regardless of
 # working directory — matches how it's invoked both directly and via systemd.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "speech_coach"))
 
 import config
 import data_store
@@ -41,6 +48,9 @@ import speaker_profiles
 import digest_preferences
 import ui_preferences
 import manual_todos
+import analyzer
+import transcribe
+import speech_coach
 
 log = logging.getLogger("omi.webapp")
 
@@ -200,6 +210,12 @@ def api_today():
     archived = conversation_state.get_all_archived()
     analyses = [a for a in data_store.load_day_analyses(today) if a.get("_stem") not in archived]
     speech_coaching = data_store.load_day_speech_coaching(today)
+    # Genuinely zero data ANYWHERE (not just today) — distinct from an
+    # ordinary empty day, this is specifically "nothing has ever been
+    # processed," worth a real onboarding message rather than the usual
+    # "nothing today, check other tabs" pointer, which would be actively
+    # misleading on a brand new install with no history to check.
+    is_first_run = not data_store.load_all_analyses()
 
     conversations = [
         {
@@ -317,6 +333,7 @@ def api_today():
     return jsonify(
         {
             "date": today.isoformat(),
+            "is_first_run": is_first_run,
             "conversation_count": len(analyses),
             "conversations": conversations,
             "due_soon": due_soon,
@@ -439,6 +456,64 @@ def api_archive_conversation(stem: str):
 def api_unarchive_conversation(stem: str):
     conversation_state.unarchive(stem)
     return jsonify({"stem": stem, "archived": False})
+
+
+@app.route("/api/conversations/<path:stem>/reprocess", methods=["POST"])
+def api_reprocess_conversation(stem: str):
+    """
+    Re-runs analysis (and speech coaching, if applicable) on a transcript
+    that already exists — no new audio file, no re-transcription. Lets
+    someone benefit from a prompt/schema improvement on an OLD recording,
+    or just retry after a one-off LLM hiccup, without needing shell access
+    to the `cp`-into-inbox trick that's been this whole project's own
+    testing method throughout.
+
+    Safe to import transcribe/analyzer/speech_coach here even though
+    webapp.py runs natively on the host, not in the container — confirmed
+    diarize.py's heavy ML imports (torch/whisperx/pyannote) are all
+    function-local, never touched at module import time, so nothing here
+    tries to load them (this endpoint never calls an actual diarization
+    function, only the plain-Python build_analysis_text()).
+
+    Overwrites the existing analysis.json — including any manual edits
+    made via the Edit form, which is exactly why the frontend confirms
+    this explicitly before calling it.
+    """
+    transcript_path = config.TRANSCRIPTS_DIR / f"{stem}.json"
+    if not transcript_path.exists():
+        abort(404)
+
+    try:
+        result = json.loads(transcript_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return jsonify({"error": f"Could not read transcript: {e}"}), 500
+
+    analysis_path = config.TRANSCRIPTS_DIR / f"{stem}.analysis.json"
+    mtime_before = analysis_path.stat().st_mtime if analysis_path.exists() else None
+
+    analysis_text = transcribe.build_analysis_text(result)
+    analyzer.analyze_and_write(analysis_text, stem)
+
+    # analyze_and_write() deliberately never raises (logs and returns on
+    # failure) — comparing mtimes is a cheap, reliable way to tell whether
+    # it actually wrote anything, without needing to change that contract.
+    mtime_after = analysis_path.stat().st_mtime if analysis_path.exists() else None
+    if mtime_after is None or mtime_after == mtime_before:
+        return jsonify({"error": "Analysis did not complete — check the webapp log for details"}), 500
+
+    coaching_ran = False
+    main_user = speaker_profiles.get_main_user()
+    segment_speakers = {seg.get("speaker") for seg in result.get("segments", [])}
+    if main_user and main_user in segment_speakers:
+        try:
+            report = speech_coach.generate_coaching_report(transcript_path)
+            coaching_path = config.TRANSCRIPTS_DIR / f"{stem}.speech_coach.json"
+            coaching_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+            coaching_ran = True
+        except Exception:
+            log.exception("Reprocess: coaching failed for %s (analysis still succeeded)", stem)
+
+    return jsonify({"stem": stem, "reprocessed": True, "coaching_ran": coaching_ran})
 
 
 # --- API: To-Dos -------------------------------------------------------------
@@ -615,6 +690,106 @@ def api_set_main_speaker(name: str):
 def api_delete_speaker(name: str):
     speaker_profiles.delete_profile(name)
     return jsonify({"deleted": name})
+
+
+@app.route("/api/settings/export")
+def api_export_data():
+    """
+    Everything valuable, zipped: all of TRANSCRIPTS_DIR (transcripts,
+    analyses, coaching reports, and speaker_profiles.json, which lives
+    there too — see #37's host/container path fix for why) plus the small
+    state files that live directly in BASE_DIR. Deliberately NOT including
+    raw audio (inbox/processing/archive/failed) — those can be genuinely
+    large, and the actual extracted value is what's here, not the source
+    audio a backup is really protecting.
+
+    Built in memory (io.BytesIO) rather than a temp file — this data is
+    small text/JSON, not audio, so this comfortably fits in memory without
+    needing disk staging or cleanup.
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for path in config.TRANSCRIPTS_DIR.glob("*"):
+            if path.is_file():
+                zf.write(path, arcname=f"transcripts/{path.name}")
+
+        for filename in (
+            "archived_conversations.json",
+            "todo_state.json",
+            "manual_todos.json",
+            "digest_preferences.json",
+            "ui_preferences.json",
+        ):
+            state_path = config.BASE_DIR / filename
+            if state_path.exists():
+                zf.write(state_path, arcname=filename)
+
+    buffer.seek(0)
+    filename = f"locustether-export-{date.today().isoformat()}.zip"
+    return send_file(buffer, mimetype="application/zip", as_attachment=True, download_name=filename)
+
+
+@app.route("/api/settings/status")
+def api_system_status():
+    """
+    Self-diagnosis for someone who isn't the person who built this and
+    doesn't have shell access already open — genuinely useful once this
+    goes out to other people running their own hardware, not just here
+    where debugging has happened live throughout.
+
+    Each check is independently wrapped — one failing (e.g. `docker` not
+    on PATH, or not permitted) never breaks the others.
+    """
+    status = {}
+
+    # Ollama: a real HTTP request, not just "is something listening" —
+    # confirms it actually responds, not just that a port is open.
+    # Uses config.OLLAMA_HOST (not a separately hardcoded URL) so this
+    # check always reflects wherever Ollama is actually configured to be,
+    # not silently checking the default address if that's ever changed.
+    try:
+        req = urllib.request.Request(f"{config.OLLAMA_HOST}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=3) as resp:  # noqa: S310 — scheme validated in config.py
+            status["ollama"] = {"reachable": resp.status == 200}
+    except (urllib.error.URLError, OSError) as e:
+        status["ollama"] = {"reachable": False, "error": str(e)}
+
+    # Disk space where the actual data lives.
+    try:
+        usage = shutil.disk_usage(config.BASE_DIR)
+        status["disk"] = {
+            "free_gb": round(usage.free / (1024**3), 1),
+            "total_gb": round(usage.total / (1024**3), 1),
+            "percent_used": round((usage.used / usage.total) * 100, 1),
+        }
+    except OSError as e:
+        status["disk"] = {"error": str(e)}
+
+    # Is the pipeline container actually running — not just "did docker
+    # compose up succeed at some point in the past."
+    # S607/S603: "docker" is resolved via PATH rather than an absolute
+    # path, and this is a subprocess call — both flagged generically by
+    # the linter, but every argument here is a hardcoded literal, never
+    # user input, so there's nothing untrusted reaching this call.
+    try:
+        result = subprocess.run(  # noqa: S603, S607
+            ["docker", "ps", "--filter", "name=omi-pipeline", "--format", "{{.Status}}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        output = result.stdout.strip()
+        status["pipeline_container"] = {"running": bool(output), "status_text": output or None}
+    except (subprocess.SubprocessError, OSError) as e:
+        status["pipeline_container"] = {"running": None, "error": str(e)}
+
+    # Current configuration — not a live check, just what's actually set,
+    # so someone can confirm what SHOULD be happening before digging
+    # further into why something isn't.
+    status["config"] = {
+        "diarization_enabled": config.DIARIZATION_ENABLED,
+        "auto_speech_coaching_enabled": config.AUTO_SPEECH_COACHING_ENABLED,
+    }
+
+    return jsonify(status)
 
 
 # --- API: Settings — UI preferences (#49, theme) ----------------------------
@@ -1081,10 +1256,23 @@ async function renderToday() {
 
   // Genuinely nothing logged today — the stats bar above already shows
   // that honestly (all zeros), so this is just a pointer to older
-  // history, not a replacement for the whole page anymore.
+  // history, not a replacement for the whole page anymore. A genuinely
+  // first-ever run (zero data anywhere, not just today) gets a real
+  // onboarding message instead — "check other tabs for older history"
+  // would be actively misleading when there IS no older history yet.
   if (!data.conversation_count && !data.action_items.length && !data.due_soon.length
       && !data.speech_coaching.length && !data.lists_today.length) {
-    html += '<p class="empty">Nothing recorded yet today. Pull up the Conversations or To-Dos tabs for older history.</p>';
+    html += data.is_first_run
+      ? `<div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-4);">
+          <p style="font-weight:600;margin-top:0;">Welcome to LocusTether!</p>
+          <p style="font-size:var(--text-sm);color:var(--color-text-muted);">
+            Nothing's been processed yet. Drop an audio recording into your inbox folder on the Thor, and it'll
+            show up here automatically once transcription and analysis finish — usually within a minute or two
+            for a short recording. Head to Settings (the gear icon above) to enroll your voice for speaker
+            recognition and speaking-style coaching, or set up a daily digest email, whenever you're ready.
+          </p>
+        </div>`
+      : '<p class="empty">Nothing recorded yet today. Pull up the Conversations or To-Dos tabs for older history.</p>';
   }
 
   document.getElementById('content').innerHTML = html;
@@ -1131,6 +1319,8 @@ async function renderConversationDetail(stem) {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);">
       <div class="date-label">${esc(c.date)} — ${c.start_time ? esc(c.start_time) + ' to ' + esc(c.time) : esc(c.time)}</div>
       <div>
+        <button onclick="reprocessConversation('${stem}')"
+          style="background:var(--color-bg-raised);color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Reprocess</button>
         <button onclick="renderConversationEditForm('${stem}')"
           style="background:var(--color-bg-raised);color:var(--color-accent);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Edit</button>
         <button onclick="deleteConversation('${stem}')"
@@ -1363,6 +1553,23 @@ async function deleteConversation(stem) {
   }
   await fetch(`/api/conversations/${encodeURIComponent(stem)}/archive`, { method: 'POST' });
   goTab('conversations');
+}
+
+async function reprocessConversation(stem) {
+  if (!confirm('Re-run analysis on this conversation? This OVERWRITES the current analysis — including any manual edits you\u2019ve made — with a fresh result. The original recording and transcript are untouched either way.')) {
+    return;
+  }
+  try {
+    const res = await fetch(`/api/conversations/${encodeURIComponent(stem)}/reprocess`, { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showErrorPanel('Reprocessing failed', body.error || `Server returned ${res.status}`);
+      return;
+    }
+    renderConversationDetail(stem);
+  } catch (err) {
+    showErrorPanel('Reprocessing failed — could not reach the server', err.message);
+  }
 }
 
 let _todosShowTodayOnly = false;
@@ -1628,6 +1835,7 @@ async function renderSettings() {
   const speakers = await (await fetch('/api/speakers')).json();
   const digestSettings = await (await fetch('/api/settings/digest')).json();
   const uiSettings = await (await fetch('/api/settings/ui')).json();
+  const status = await (await fetch('/api/settings/status')).json();
 
   let html = '<h1 style="margin-top:var(--space-2);">Settings</h1>';
   html += '<h2 style="font-size:var(--text-md);">Voice Recognition</h2>';
@@ -1718,8 +1926,45 @@ async function renderSettings() {
         background:${uiSettings.text_size === 'large' ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)'};
         color:${uiSettings.text_size === 'large' ? 'var(--color-button-text)' : 'var(--color-text-primary)'};">Large</button>
     </div>
+
+    <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Your Data</h2>
+    <p style="font-size:var(--text-sm);color:var(--color-text-muted);">Download everything LocusTether has extracted
+      — transcripts, analyses, coaching reports, to-dos, and settings — as a zip file. Doesn't include the raw
+      audio recordings themselves, just what's been extracted from them.</p>
+    <a href="/api/settings/export" style="text-decoration:none;">
+      <button style="width:100%;background:var(--color-bg-raised);color:var(--color-text-primary);border:1px solid var(--color-border);border-radius:6px;padding:12px;font-size:var(--text-base);">
+        Download all data
+      </button>
+    </a>
+
+    <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">System Status</h2>
+    <div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-3);">
+      ${statusRow('Ollama', status.ollama.reachable, status.ollama.reachable ? 'Reachable' : (status.ollama.error || 'Not reachable'))}
+      ${statusRow('Pipeline container', status.pipeline_container.running, status.pipeline_container.running === null ? (status.pipeline_container.error || 'Could not check') : (status.pipeline_container.status_text || 'Not running'))}
+      <div style="display:flex;justify-content:space-between;padding:var(--space-1) 0;font-size:var(--text-sm);">
+        <span>Disk space</span>
+        <span style="color:var(--color-text-muted);">${status.disk.free_gb ?? '?'} GB free of ${status.disk.total_gb ?? '?'} GB (${status.disk.percent_used ?? '?'}% used)</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-1) 0;font-size:var(--text-sm);">
+        <span>Diarization</span>
+        <span style="color:var(--color-text-muted);">${status.config.diarization_enabled ? 'Enabled' : 'Disabled'}</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;padding:var(--space-1) 0;font-size:var(--text-sm);">
+        <span>Automatic speech coaching</span>
+        <span style="color:var(--color-text-muted);">${status.config.auto_speech_coaching_enabled ? 'Enabled' : 'Disabled'}</span>
+      </div>
+    </div>
   `;
   document.getElementById('content').innerHTML = html;
+}
+
+function statusRow(label, ok, detail) {
+  const color = ok === true ? 'var(--color-success)' : ok === false ? 'var(--color-danger)' : 'var(--color-text-muted)';
+  const dot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:var(--space-2);"></span>`;
+  return `<div style="display:flex;justify-content:space-between;align-items:center;padding:var(--space-1) 0;font-size:var(--text-sm);">
+    <span>${dot}${esc(label)}</span>
+    <span style="color:var(--color-text-muted);">${esc(String(detail))}</span>
+  </div>`;
 }
 
 async function setTheme(theme) {
