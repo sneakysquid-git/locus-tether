@@ -757,10 +757,6 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
               margin-bottom: var(--space-2); background: var(--color-bg-card);
               -webkit-user-select: none; user-select: none; cursor: pointer; }
   .list-row:active { background: var(--color-bg-hover); }
-  .stat-box { flex: 1; min-width: 80px; background: var(--color-bg-card); border: 1px solid var(--color-border);
-              border-radius: 8px; padding: var(--space-2) var(--space-1); text-align: center; }
-  .stat-num { font-size: var(--text-lg); font-weight: 700; color: var(--color-text-primary); }
-  .stat-label { font-size: var(--text-xs); color: var(--color-text-muted); }
   .badge { display: inline-block; color: var(--color-button-text); font-size: var(--text-xs); padding: var(--space-0) var(--space-2);
            border-radius: 10px; margin: var(--space-2) 0; }
   .todo-row { display: flex; align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-bg-raised);
@@ -930,7 +926,7 @@ function setHeader(title, showRefresh, showBack) {
 }
 
 async function renderToday() {
-  setHeader('LocusTether', true, false);
+  setHeader('', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
   const data = await (await fetch('/api/today')).json();
 
@@ -940,26 +936,48 @@ async function renderToday() {
     return;
   }
 
-  // --- Stats bar: genuine at-a-glance summary, computed server-side so
-  // this isn't just re-deriving numbers the sections below already show —
-  // it's meant to replace needing to actually read them for a quick check. ---
+  // --- Greeting + waveform signature (#51 follow-up: "homepage
+  // prettification") — the one deliberate visual flourish on this page,
+  // built from the app's actual subject matter (voice/audio) rather than
+  // generic decoration. Everything else on this page stays as quiet and
+  // disciplined as the rest of the app. ---
+  const hour = new Date().getHours();
+  const greeting = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : hour < 21 ? 'Good evening' : 'Good night';
+  const waveformBars = [6, 14, 9, 18, 11, 16, 7, 13, 10].map(h =>
+    `<div style="width:3px;height:${h}px;background:var(--color-accent);border-radius:2px;opacity:0.55;"></div>`
+  ).join('');
+
+  let html = `
+    <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-4);">
+      <div style="display:flex;align-items:flex-end;gap:2px;height:18px;">${waveformBars}</div>
+      <h1 style="margin:0;font-size:var(--text-lg);">${greeting}</h1>
+    </div>
+
+    <div style="display:flex;justify-content:space-around;padding:var(--space-3) 0;
+      border-top:1px solid var(--color-border);border-bottom:1px solid var(--color-border);margin-bottom:var(--space-4);">`;
+
+  const statItem = (iconSvg, num, label) => `
+    <div style="text-align:center;">
+      <div style="color:var(--color-accent);margin-bottom:var(--space-1);">${iconSvg}</div>
+      <div style="font-size:var(--text-md);font-weight:700;">${num}</div>
+      <div style="font-size:var(--text-xs);color:var(--color-text-muted);">${label}</div>
+    </div>`;
+
+  const conversationIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>';
+  const peopleIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+  const checkIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><polyline points="8 12 11 15 16 9"/></svg>';
+  const micIcon = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
+
   const s = data.stats;
-  let trendHtml = '';
+  html += statItem(conversationIcon, s.conversation_count, s.conversation_count === 1 ? 'conversation' : 'conversations');
+  html += statItem(peopleIcon, s.people_count, 'people');
+  html += statItem(checkIcon, s.action_item_count, s.action_item_count === 1 ? 'to-do' : 'to-dos');
   if (s.feedback_trend) {
     const t = s.feedback_trend;
-    if (t.direction) {
-      const arrow = t.direction === 'up' ? '↑' : t.direction === 'down' ? '↓' : '→';
-      trendHtml = `<div class="stat-box"><div class="stat-num">${arrow} ${t.today_avg_wpm}</div><div class="stat-label">WPM vs your ${t.baseline_avg_wpm} avg</div></div>`;
-    } else {
-      trendHtml = `<div class="stat-box"><div class="stat-num">${t.today_avg_wpm}</div><div class="stat-label">WPM today</div></div>`;
-    }
+    const trendLabel = t.direction ? `${t.direction === 'up' ? '↑' : t.direction === 'down' ? '↓' : '→'} WPM` : 'WPM today';
+    html += statItem(micIcon, t.today_avg_wpm, trendLabel);
   }
-  let html = `<div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4);flex-wrap:wrap;">
-    <div class="stat-box"><div class="stat-num">${s.conversation_count}</div><div class="stat-label">conversation${s.conversation_count === 1 ? '' : 's'}</div></div>
-    <div class="stat-box"><div class="stat-num">${s.people_count}</div><div class="stat-label">people</div></div>
-    <div class="stat-box"><div class="stat-num">${s.action_item_count}</div><div class="stat-label">to-do${s.action_item_count === 1 ? '' : 's'}</div></div>
-    ${trendHtml}
-  </div>`;
+  html += '</div>';
 
   // --- To-Dos today: due-soon + regular action items merged into ONE
   // section (previously two separately-headed blocks) — due-soon items
