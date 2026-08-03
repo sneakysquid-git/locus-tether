@@ -126,13 +126,14 @@ def load_all_speech_coaching() -> list[dict]:
     conversation it's about, not whenever the script happened to run).
     """
     results = []
-    for path in sorted(config.TRANSCRIPTS_DIR.glob("*.speech_coach.json")):
+    for path in config.TRANSCRIPTS_DIR.glob("*.speech_coach.json"):
         stem = path.stem.removesuffix(".speech_coach")
         analysis_path = config.TRANSCRIPTS_DIR / f"{stem}.analysis.json"
         if analysis_path.exists():
-            relevant_date = datetime.fromtimestamp(analysis_path.stat().st_mtime).date()
+            relevant_mtime = analysis_path.stat().st_mtime
         else:
-            relevant_date = datetime.fromtimestamp(path.stat().st_mtime).date()
+            relevant_mtime = path.stat().st_mtime
+        relevant_date = datetime.fromtimestamp(relevant_mtime).date()
 
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -140,8 +141,9 @@ def load_all_speech_coaching() -> list[dict]:
             continue
         data["_stem"] = stem
         data["_date"] = relevant_date.isoformat()
+        data["_timestamp"] = relevant_mtime
         results.append(data)
-    results.sort(key=lambda d: d["_date"], reverse=True)
+    results.sort(key=lambda d: d["_timestamp"], reverse=True)
     return results
 
 
@@ -186,6 +188,7 @@ def aggregate_lists() -> list[dict]:
         stem = a.get("_stem", "")
         title = a.get("title", stem)
         date_str = a.get("_date", "")
+        timestamp = a.get("_timestamp", 0)
         for list_idx, mlist in enumerate(a.get("mentioned_lists", [])):
             name = mlist.get("list_name", "Misc").strip()
             normalized = name.lower()
@@ -201,6 +204,7 @@ def aggregate_lists() -> list[dict]:
                         "source_stem": stem,
                         "source_title": title,
                         "date": date_str,
+                        "timestamp": timestamp,
                     }
                 )
 

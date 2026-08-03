@@ -163,7 +163,7 @@ def _condensed_list(list_group: dict) -> dict:
     return {
         "list_name": list_group["list_name"],
         "item_count": len(open_items),
-        "most_recent_date": max((i["date"] for i in open_items), default=""),
+        "most_recent_timestamp": max((i.get("timestamp", 0) for i in open_items), default=0),
     }
 
 
@@ -425,7 +425,7 @@ def api_lists():
         groups.append(g)
     condensed = [_condensed_list(g) for g in groups]
     condensed = [c for c in condensed if c["item_count"] > 0]  # fully-checked-off lists just disappear
-    condensed.sort(key=lambda c: c["most_recent_date"], reverse=True)
+    condensed.sort(key=lambda c: c["most_recent_timestamp"], reverse=True)
     return jsonify(condensed)
 
 
