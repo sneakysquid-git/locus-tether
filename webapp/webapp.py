@@ -39,6 +39,7 @@ import todo_state
 import conversation_state
 import speaker_profiles
 import digest_preferences
+import ui_preferences
 
 log = logging.getLogger("omi.webapp")
 
@@ -518,6 +519,23 @@ def api_delete_speaker(name: str):
     return jsonify({"deleted": name})
 
 
+# --- API: Settings — UI preferences (#49, theme) ----------------------------
+
+@app.route("/api/settings/ui")
+def api_get_ui_settings():
+    return jsonify(ui_preferences.get_preferences())
+
+
+@app.route("/api/settings/ui", methods=["POST"])
+def api_save_ui_settings():
+    body = request.get_json(force=True) or {}
+    theme = body.get("theme")
+    if theme not in ("dark", "light"):
+        return jsonify({"error": "theme must be 'dark' or 'light'"}), 400
+    updated = ui_preferences.set_preferences(theme=theme)
+    return jsonify(updated)
+
+
 # --- API: Settings — digest email preferences -------------------------------
 
 @app.route("/api/settings/digest")
@@ -566,7 +584,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="#0d1117">
+<meta name="theme-color" content="var(--color-bg-page)">
 <title>LocusTether</title>
 <style>
   :root {
@@ -596,60 +614,112 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
        a functional value, not a decorative spacing choice, so it's kept
        separate from the spacing scale above. */
     --tabbar-clearance: 76px;
+
+    /* Color system (#49) — every color in this app used to be a hardcoded
+       hex value repeated throughout the CSS block and inline styles.
+       These semantic variables are what actually makes a light/dark
+       toggle possible: switching a single data-theme attribute below
+       swaps every one of these at once, rather than needing to touch each
+       of the ~118 individual color references throughout the file.
+
+       Dark values here match GitHub's actual dark theme palette (the
+       original hardcoded colors already happened to be GitHub Dark's
+       exact values) — light values below are GitHub's real light theme
+       equivalents, not guessed, so contrast ratios are already
+       proven/accessible rather than ad hoc.
+
+       Category badge colors (CATEGORY_COLORS in JS) are deliberately NOT
+       part of this system — badge text is always white regardless of
+       theme (see .badge below), so those colors' contrast requirement
+       (against white badge text) is already theme-independent.
+    */
+    --color-bg-page: #0d1117;
+    --color-bg-card: #161b22;
+    --color-bg-raised: #21262d;
+    --color-bg-hover: #1c2230;
+    --color-bg-danger: #3d1f1f;
+    --color-text-primary: #e6edf3;
+    --color-text-muted: #8b949e;
+    --color-text-dim: #6e7681;
+    --color-border: #30363d;
+    --color-accent: #58a6ff;
+    --color-accent-strong: #1f6feb;
+    --color-danger: #f85149;
+    --color-warning: #ff9662;
+    --color-success: #3fb950;
+    --color-button-text: #ffffff;
+  }
+
+  :root[data-theme="light"] {
+    --color-bg-page: #ffffff;
+    --color-bg-card: #f6f8fa;
+    --color-bg-raised: #eaeef2;
+    --color-bg-hover: #dde3ea;
+    --color-bg-danger: #ffebe9;
+    --color-text-primary: #1f2328;
+    --color-text-muted: #59636e;
+    --color-text-dim: #6e7781;
+    --color-border: #d0d7de;
+    --color-accent: #0969da;
+    --color-accent-strong: #0550ae;
+    --color-danger: #cf222e;
+    --color-warning: #bc4c00;
+    --color-success: #1a7f37;
+    --color-button-text: #ffffff;
   }
   * { box-sizing: border-box; }
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 600px;
-         margin: 0 auto; padding: var(--space-4) var(--space-4) var(--tabbar-clearance); color: #e6edf3; background: #0d1117; }
-  h1, h2 { color: #e6edf3; }
+         margin: 0 auto; padding: var(--space-4) var(--space-4) var(--tabbar-clearance); color: var(--color-text-primary); background: var(--color-bg-page); }
+  h1, h2 { color: var(--color-text-primary); }
   h1 { font-size: var(--text-lg); display: flex; justify-content: space-between; align-items: center; }
-  #refresh-btn { background: #1f6feb; color: #ffffff; border: none; border-radius: 6px;
+  #refresh-btn { background: var(--color-accent-strong); color: var(--color-button-text); border: none; border-radius: 6px;
                  padding: var(--space-2) var(--space-4); font-size: var(--text-base); }
   #refresh-btn:active { opacity: 0.75; }
-  #back-btn { background: none; border: none; color: #58a6ff; font-size: var(--text-md); padding: var(--space-2) 0;
+  #back-btn { background: none; border: none; color: var(--color-accent); font-size: var(--text-md); padding: var(--space-2) 0;
               display: flex; align-items: center; gap: 4px; }
-  #last-updated { color: #8b949e; font-size: var(--text-sm); margin-top: -8px; margin-bottom: var(--space-4); }
-  .card { border: 1px solid #30363d; border-radius: 8px; padding: var(--space-3) var(--space-4);
-          margin-bottom: var(--space-3); background: #161b22; }
-  .list-row { border: 1px solid #30363d; border-radius: 8px; padding: var(--space-3) var(--space-3);
-              margin-bottom: var(--space-2); background: #161b22;
+  #last-updated { color: var(--color-text-muted); font-size: var(--text-sm); margin-top: -8px; margin-bottom: var(--space-4); }
+  .card { border: 1px solid var(--color-border); border-radius: 8px; padding: var(--space-3) var(--space-4);
+          margin-bottom: var(--space-3); background: var(--color-bg-card); }
+  .list-row { border: 1px solid var(--color-border); border-radius: 8px; padding: var(--space-3) var(--space-3);
+              margin-bottom: var(--space-2); background: var(--color-bg-card);
               -webkit-user-select: none; user-select: none; cursor: pointer; }
-  .list-row:active { background: #1c2230; }
-  .badge { display: inline-block; color: #ffffff; font-size: var(--text-xs); padding: var(--space-0) var(--space-2);
+  .list-row:active { background: var(--color-bg-hover); }
+  .badge { display: inline-block; color: var(--color-button-text); font-size: var(--text-xs); padding: var(--space-0) var(--space-2);
            border-radius: 10px; margin: var(--space-2) 0; }
-  .todo-row { display: flex; align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid #21262d;
+  .todo-row { display: flex; align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-bg-raised);
               -webkit-user-select: none; user-select: none; }
   .todo-row input[type="checkbox"] {
     appearance: none; -webkit-appearance: none;
     margin-right: var(--space-2); width: 20px; height: 20px; flex-shrink: 0;
-    border: 2px solid #30363d; border-radius: 6px; background: #161b22;
+    border: 2px solid var(--color-border); border-radius: 6px; background: var(--color-bg-card);
     cursor: pointer; position: relative; top: 2px;
     transition: background-color 0.15s ease, border-color 0.15s ease;
   }
   .todo-row input[type="checkbox"]:checked {
-    background: #1f6feb; border-color: #1f6feb;
+    background: var(--color-accent-strong); border-color: var(--color-accent-strong);
   }
   .todo-row input[type="checkbox"]:checked::after {
     content: ""; position: absolute; left: 6px; top: 2px;
     width: 5px; height: 10px;
-    border: solid #ffffff; border-width: 0 2px 2px 0;
+    border: solid var(--color-button-text); border-width: 0 2px 2px 0;
     transform: rotate(45deg);
   }
   .todo-row input[type="checkbox"]:focus-visible {
-    outline: 2px solid #58a6ff; outline-offset: 2px;
+    outline: 2px solid var(--color-accent); outline-offset: 2px;
   }
-  .todo-row .desc { color: #e6edf3; }
-  .todo-done { text-decoration: line-through; color: #6e7681; transition: color 0.3s ease; }
-  .due { color: #ff9662; font-size: var(--text-sm); }
-  .empty { color: #8b949e; }
-  .source-label { color: #6e7681; font-size: var(--text-sm);
+  .todo-row .desc { color: var(--color-text-primary); }
+  .todo-done { text-decoration: line-through; color: var(--color-text-dim); transition: color 0.3s ease; }
+  .due { color: var(--color-warning); font-size: var(--text-sm); }
+  .empty { color: var(--color-text-muted); }
+  .source-label { color: var(--color-text-dim); font-size: var(--text-sm);
                   -webkit-user-select: none; user-select: none; cursor: pointer; }
-  .date-label { color: #6e7681; font-size: var(--text-xs); }
+  .date-label { color: var(--color-text-dim); font-size: var(--text-xs); }
 
-  #tabbar { position: fixed; bottom: 0; left: 0; right: 0; background: #161b22;
-            border-top: 1px solid #30363d; display: flex; max-width: 600px; margin: 0 auto; }
-  #tabbar button { flex: 1; background: none; border: none; color: #6e7681; padding: var(--space-3) var(--space-1);
+  #tabbar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--color-bg-card);
+            border-top: 1px solid var(--color-border); display: flex; max-width: 600px; margin: 0 auto; }
+  #tabbar button { flex: 1; background: none; border: none; color: var(--color-text-dim); padding: var(--space-3) var(--space-1);
                    font-size: var(--text-sm); display: flex; flex-direction: column; align-items: center; gap: 2px; }
-  #tabbar button.active { color: #58a6ff; }
+  #tabbar button.active { color: var(--color-accent); }
   #tabbar .icon { display: flex; }
   #tabbar svg { width: 20px; height: 20px; }
 </style>
@@ -719,7 +789,7 @@ function esc(s) {
 // has one (multi-person meetings with named participants) — stays absent
 // entirely for personal-conversation action items, where owner is null.
 function ownerLabel(item) {
-  return item.owner ? ` <span style="color:#58a6ff;font-size:var(--text-sm);">(${esc(item.owner)})</span>` : '';
+  return item.owner ? ` <span style="color:var(--color-accent);font-size:var(--text-sm);">(${esc(item.owner)})</span>` : '';
 }
 
 // --- Simple client-side router using the History API, so both the
@@ -768,7 +838,7 @@ function setHeader(title, showRefresh, showBack) {
   const backHtml = showBack
     ? `<button id="back-btn" onclick="history.back()">&#8592; Back</button>` : '';
   const settingsHtml = showRefresh
-    ? `<button onclick="goTab('settings')" style="background:none;border:none;color:#8b949e;padding:4px 8px;margin-right:var(--space-2);" aria-label="Settings">
+    ? `<button onclick="goTab('settings')" style="background:none;border:none;color:var(--color-text-muted);padding:4px 8px;margin-right:var(--space-2);" aria-label="Settings">
         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-5px;">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
@@ -787,7 +857,7 @@ async function renderToday() {
   document.getElementById('content').innerHTML = 'Loading...';
   const data = await (await fetch('/api/today')).json();
 
-  let html = `<p style="color:#8b949e;font-size:var(--text-base);">
+  let html = `<p style="color:var(--color-text-muted);font-size:var(--text-base);">
     ${data.conversation_count} conversation(s) today</p>`;
 
   if (!data.conversation_count && !data.action_items.length && !data.due_soon.length) {
@@ -801,7 +871,7 @@ async function renderToday() {
   if (data.due_soon.length) {
     html += '<h2 style="font-size:var(--text-md);">Due soon</h2>';
     data.due_soon.forEach(item => {
-      html += `<div class="todo-row" style="border-left:3px solid #ff9662;padding-left:var(--space-2);"
+      html += `<div class="todo-row" style="border-left:3px solid var(--color-warning);padding-left:var(--space-2);"
         data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
           onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
@@ -853,7 +923,7 @@ async function renderToday() {
     data.speech_coaching.forEach(sc => {
       html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
         <div style="font-weight:600;">${esc(sc.title)}</div>
-        <p style="font-size:var(--text-sm);color:#8b949e;margin:var(--space-1) 0 0;">${esc(sc.overall_take_preview)}</p>
+        <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin:var(--space-1) 0 0;">${esc(sc.overall_take_preview)}</p>
       </div>`;
     });
   }
@@ -893,7 +963,7 @@ async function renderConversationsList() {
         <div class="date-label">${esc(c.date)} ${esc(c.time)}</div>
       </div>
       <span class="badge" style="background:${color};">${esc(c.category)}</span>
-      <p style="font-size:var(--text-sm);color:#8b949e;margin:var(--space-2) 0 0;">${esc(c.preview)}</p>
+      <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin:var(--space-2) 0 0;">${esc(c.preview)}</p>
     </div>`;
   });
   document.getElementById('content').innerHTML = html;
@@ -916,29 +986,29 @@ async function renderConversationDetail(stem) {
       <div class="date-label">${esc(c.date)} — ${c.start_time ? esc(c.start_time) + ' to ' + esc(c.time) : esc(c.time)}</div>
       <div>
         <button onclick="renderConversationEditForm('${stem}')"
-          style="background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Edit</button>
+          style="background:var(--color-bg-raised);color:var(--color-accent);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Edit</button>
         <button onclick="deleteConversation('${stem}')"
-          style="background:#21262d;color:#f85149;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:var(--text-sm);">Delete</button>
+          style="background:var(--color-bg-raised);color:var(--color-danger);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);">Delete</button>
       </div>
     </div>
     <span class="badge" style="background:${color};">${esc(c.category)}</span>`;
 
   if (c.speaker_count) {
     const label = c.speaker_count === 1 ? '1 speaker detected' : `${c.speaker_count} speakers detected`;
-    html += ` <span style="color:#8b949e;font-size:var(--text-sm);">${label}</span>`;
+    html += ` <span style="color:var(--color-text-muted);font-size:var(--text-sm);">${label}</span>`;
   }
 
   html += `<p style="font-size:var(--text-md);line-height:1.6;margin-top:var(--space-3);">${esc(c.overview)}</p>`;
 
   if (c.atmosphere) {
-    html += `<p style="font-size:var(--text-sm);color:#8b949e;font-style:italic;margin-top:calc(-1 * var(--space-2));">${esc(c.atmosphere)}</p>`;
+    html += `<p style="font-size:var(--text-sm);color:var(--color-text-muted);font-style:italic;margin-top:calc(-1 * var(--space-2));">${esc(c.atmosphere)}</p>`;
   }
 
   if (c.participants && c.participants.length) {
     html += '<div style="margin-top:var(--space-2);">';
     c.participants.forEach(p => {
       const roleText = p.role ? ` — ${esc(p.role)}` : '';
-      html += `<span style="display:inline-block;background:#21262d;border:1px solid #30363d;border-radius:12px;
+      html += `<span style="display:inline-block;background:var(--color-bg-raised);border:1px solid var(--color-border);border-radius:12px;
         padding:2px 10px;margin:0 var(--space-1) var(--space-1) 0;font-size:var(--text-sm);">${esc(p.name)}${roleText}</span>`;
     });
     html += '</div>';
@@ -992,11 +1062,11 @@ function renderEditRows(rowsData, placeholders) {
   rowsData.forEach(values => {
     const inputs = values.map((v, i) =>
       `<input type="text" placeholder="${esc(placeholders[i])}" value="${esc(v)}"
-        style="flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:6px 8px;margin-right:var(--space-2);">`
+        style="flex:1;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:6px 8px;margin-right:var(--space-2);">`
     ).join('');
     html += `<div class="edit-list-row" style="display:flex;margin-bottom:var(--space-2);">${inputs}
       <button type="button" onclick="this.parentElement.remove()"
-        style="background:#3d1f1f;color:#f85149;border:none;border-radius:6px;padding:0 12px;flex-shrink:0;">×</button></div>`;
+        style="background:var(--color-bg-danger);color:var(--color-danger);border:none;border-radius:6px;padding:0 12px;flex-shrink:0;">×</button></div>`;
   });
   return html;
 }
@@ -1010,13 +1080,13 @@ function addEditRow(containerId, placeholders) {
     const input = document.createElement('input');
     input.type = 'text';
     input.placeholder = ph;
-    input.style.cssText = 'flex:1;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:6px 8px;margin-right:8px;';
+    input.style.cssText = 'flex:1;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:6px 8px;margin-right:8px;';
     div.appendChild(input);
   });
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.textContent = '×';
-  btn.style.cssText = 'background:#3d1f1f;color:#f85149;border:none;border-radius:6px;padding:0 12px;flex-shrink:0;';
+  btn.style.cssText = 'background:var(--color-bg-danger);color:var(--color-danger);border:none;border-radius:6px;padding:0 12px;flex-shrink:0;';
   btn.onclick = () => div.remove();
   div.appendChild(btn);
   container.appendChild(div);
@@ -1035,9 +1105,9 @@ function renderConversationEditForm(stem) {
   const c = window._currentConversation;
   setHeader('', false, true);
 
-  const inputStyle = 'width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);box-sizing:border-box;';
-  const labelStyle = 'font-size:var(--text-sm);color:#8b949e;display:block;margin-bottom:var(--space-1);';
-  const addBtnStyle = 'background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:6px 12px;font-size:var(--text-sm);margin-bottom:var(--space-4);';
+  const inputStyle = 'width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);box-sizing:border-box;';
+  const labelStyle = 'font-size:var(--text-sm);color:var(--color-text-muted);display:block;margin-bottom:var(--space-1);';
+  const addBtnStyle = 'background:var(--color-bg-raised);color:var(--color-accent);border:1px solid var(--color-border);border-radius:6px;padding:6px 12px;font-size:var(--text-sm);margin-bottom:var(--space-4);';
 
   const html = `
     <h1 style="margin-top:var(--space-2);">Edit Conversation</h1>
@@ -1072,8 +1142,8 @@ function renderConversationEditForm(stem) {
     <button type="button" onclick="addEditRow('edit-action_items', ['Description', 'Due date', 'Owner'])" style="${addBtnStyle}">+ Add action item</button>
 
     <div style="display:flex;gap:var(--space-2);margin-top:var(--space-2);">
-      <button onclick="saveConversationEdits('${stem}')" style="flex:1;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Save</button>
-      <button onclick="renderConversationDetail('${stem}')" style="flex:1;background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:12px;font-size:var(--text-base);">Cancel</button>
+      <button onclick="saveConversationEdits('${stem}')" style="flex:1;background:var(--color-accent-strong);color:var(--color-button-text);border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Save</button>
+      <button onclick="renderConversationDetail('${stem}')" style="flex:1;background:var(--color-bg-raised);color:var(--color-text-primary);border:1px solid var(--color-border);border-radius:6px;padding:12px;font-size:var(--text-base);">Cancel</button>
     </div>
   `;
   document.getElementById('content').innerHTML = html;
@@ -1086,12 +1156,12 @@ function showErrorPanel(title, fullText) {
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;display:flex;align-items:center;justify-content:center;padding:var(--space-4);';
   overlay.innerHTML = `
-    <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;max-width:100%;max-height:80vh;
+    <div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:8px;max-width:100%;max-height:80vh;
       display:flex;flex-direction:column;padding:var(--space-4);">
-      <h2 style="font-size:var(--text-md);color:#f85149;margin-top:0;">${esc(title)}</h2>
-      <pre style="overflow-y:auto;white-space:pre-wrap;word-break:break-word;background:#0d1117;border:1px solid #30363d;
-        border-radius:6px;padding:var(--space-2);font-size:var(--text-sm);color:#e6edf3;flex:1;margin:0 0 var(--space-3) 0;">${esc(fullText)}</pre>
-      <button id="error-panel-dismiss" style="background:#21262d;color:#e6edf3;border:1px solid #30363d;border-radius:6px;padding:10px;font-size:var(--text-base);">Dismiss</button>
+      <h2 style="font-size:var(--text-md);color:var(--color-danger);margin-top:0;">${esc(title)}</h2>
+      <pre style="overflow-y:auto;white-space:pre-wrap;word-break:break-word;background:var(--color-bg-page);border:1px solid var(--color-border);
+        border-radius:6px;padding:var(--space-2);font-size:var(--text-sm);color:var(--color-text-primary);flex:1;margin:0 0 var(--space-3) 0;">${esc(fullText)}</pre>
+      <button id="error-panel-dismiss" style="background:var(--color-bg-raised);color:var(--color-text-primary);border:1px solid var(--color-border);border-radius:6px;padding:10px;font-size:var(--text-base);">Dismiss</button>
     </div>`;
   document.body.appendChild(overlay);
   document.getElementById('error-panel-dismiss').onclick = () => overlay.remove();
@@ -1156,7 +1226,7 @@ async function renderTodos() {
 
   let html = `<div style="margin-bottom:var(--space-3);">
     <button onclick="goDetail('todos', 'completed')"
-      style="background:#21262d;color:#8b949e;border:1px solid #30363d;border-radius:6px;padding:var(--space-2) var(--space-3);font-size:var(--text-sm);">
+      style="background:var(--color-bg-raised);color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:6px;padding:var(--space-2) var(--space-3);font-size:var(--text-sm);">
       View Completed Today
     </button>
   </div>`;
@@ -1192,7 +1262,7 @@ async function renderCompletedTodos() {
     return;
   }
 
-  html += '<p style="color:#8b949e;font-size:var(--text-sm);">Tap a checkbox to undo — this list clears itself at midnight, but nothing is ever actually deleted (it still shows in its original conversation).</p>';
+  html += '<p style="color:var(--color-text-muted);font-size:var(--text-sm);">Tap a checkbox to undo — this list clears itself at midnight, but nothing is ever actually deleted (it still shows in its original conversation).</p>';
 
   items.forEach(item => {
     const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
@@ -1224,8 +1294,8 @@ async function renderFeedbackList() {
         <div style="font-weight:600;">${esc(sc.title)}</div>
         <div class="date-label">${esc(sc.date)}</div>
       </div>
-      <div style="font-size:var(--text-sm);color:#8b949e;margin:var(--space-1) 0;">${sc.words_per_minute} WPM</div>
-      <p style="font-size:var(--text-sm);color:#8b949e;margin:0;">${esc(sc.overall_take_preview)}</p>
+      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin:var(--space-1) 0;">${sc.words_per_minute} WPM</div>
+      <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin:0;">${esc(sc.overall_take_preview)}</p>
     </div>`;
   });
   document.getElementById('content').innerHTML = html;
@@ -1239,7 +1309,7 @@ function renderFeedbackCardHtml(sc, title) {
 
   let html = `<h2 style="font-size:var(--text-md);margin-top:var(--space-6);">Speaking Style Feedback</h2>
     <div class="card">
-      <div style="font-size:var(--text-sm);color:#8b949e;margin-bottom:var(--space-2);">
+      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">
         ${pace.words_per_minute} WPM, ${pace.duration_seconds}s${fillerNote}
       </div>`;
 
@@ -1254,8 +1324,8 @@ function renderFeedbackCardHtml(sc, title) {
     fb.areas_to_improve.forEach(area => {
       html += `<div style="font-size:var(--text-sm);margin:var(--space-2) 0 10px;">
         ${esc(area.observation)}<br>
-        <span style="color:#8b949e;">Example: "${esc(area.example)}"</span><br>
-        <span style="color:#3fb950;">Try instead: ${esc(area.suggestion)}</span>
+        <span style="color:var(--color-text-muted);">Example: "${esc(area.example)}"</span><br>
+        <span style="color:var(--color-success);">Try instead: ${esc(area.suggestion)}</span>
       </div>`;
     });
   }
@@ -1337,10 +1407,11 @@ async function renderSettings() {
   document.getElementById('content').innerHTML = 'Loading...';
   const speakers = await (await fetch('/api/speakers')).json();
   const digestSettings = await (await fetch('/api/settings/digest')).json();
+  const uiSettings = await (await fetch('/api/settings/ui')).json();
 
   let html = '<h1 style="margin-top:var(--space-2);">Settings</h1>';
   html += '<h2 style="font-size:var(--text-md);">Voice Recognition</h2>';
-  html += `<p style="font-size:var(--text-sm);color:#8b949e;">Enroll a voice once, and future conversations will show that
+  html += `<p style="font-size:var(--text-sm);color:var(--color-text-muted);">Enroll a voice once, and future conversations will show that
     person's real name instead of an anonymous speaker label. Mark yourself as the
     main user so speaking-style coaching analyzes only your own speech, not whoever
     else is in the room.</p>`;
@@ -1350,13 +1421,13 @@ async function renderSettings() {
       html += `<div class="list-row" style="display:flex;justify-content:space-between;align-items:center;">
         <div>
           <span style="font-weight:600;">${esc(s.name)}</span>
-          ${s.is_main_user ? '<span style="color:#58a6ff;font-size:var(--text-sm);"> (main user)</span>' : ''}
+          ${s.is_main_user ? '<span style="color:var(--color-accent);font-size:var(--text-sm);"> (main user)</span>' : ''}
         </div>
         <div>
           ${s.is_main_user ? '' : `<button onclick="setMainSpeaker('${esc(s.name)}')"
-              style="background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Set as main</button>`}
+              style="background:var(--color-bg-raised);color:var(--color-accent);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Set as main</button>`}
           <button onclick="deleteSpeaker('${esc(s.name)}')"
-            style="background:#21262d;color:#f85149;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:var(--text-sm);">Delete</button>
+            style="background:var(--color-bg-raised);color:var(--color-danger);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);">Delete</button>
         </div>
       </div>`;
     });
@@ -1366,35 +1437,70 @@ async function renderSettings() {
 
   html += `
     <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Enroll a New Voice</h2>
-    <p style="font-size:var(--text-sm);color:#8b949e;">Upload a short (10-30 second), clean recording of just this
+    <p style="font-size:var(--text-sm);color:var(--color-text-muted);">Upload a short (10-30 second), clean recording of just this
       person talking — background noise or other voices in the sample will make matching less reliable.</p>
-    <label style="font-size:var(--text-sm);color:#8b949e;display:block;margin-bottom:var(--space-1);">Name</label>
+    <label style="font-size:var(--text-sm);color:var(--color-text-muted);display:block;margin-bottom:var(--space-1);">Name</label>
     <input type="text" id="enroll-name" placeholder="e.g. Eric"
-      style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);box-sizing:border-box;">
+      style="width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);box-sizing:border-box;">
     <label style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3);font-size:var(--text-base);">
       <input type="checkbox" id="enroll-is-main-user" style="width:auto;">
       This is me (main user for speaking-style coaching)
     </label>
     <input type="file" id="enroll-audio" accept="audio/*"
-      style="width:100%;margin-bottom:var(--space-3);color:#e6edf3;">
+      style="width:100%;margin-bottom:var(--space-3);color:var(--color-text-primary);">
     <button onclick="submitEnrollment()"
-      style="width:100%;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Enroll</button>
-    <div id="enroll-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:#8b949e;"></div>
+      style="width:100%;background:var(--color-accent-strong);color:var(--color-button-text);border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Enroll</button>
+    <div id="enroll-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--color-text-muted);"></div>
 
     <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Daily Digest Email</h2>
-    <p style="font-size:var(--text-sm);color:#8b949e;">Get an email summarizing each day's conversations and to-dos.</p>
+    <p style="font-size:var(--text-sm);color:var(--color-text-muted);">Get an email summarizing each day's conversations and to-dos.</p>
     <label style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3);font-size:var(--text-base);">
       <input type="checkbox" id="digest-enabled" ${digestSettings.enabled ? 'checked' : ''} style="width:auto;">
       Send me a daily digest email
     </label>
-    <label style="font-size:var(--text-sm);color:#8b949e;display:block;margin-bottom:var(--space-1);">Email address</label>
+    <label style="font-size:var(--text-sm);color:var(--color-text-muted);display:block;margin-bottom:var(--space-1);">Email address</label>
     <input type="email" id="digest-email" placeholder="you@example.com" value="${esc(digestSettings.email || '')}"
-      style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);box-sizing:border-box;">
+      style="width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);box-sizing:border-box;">
     <button onclick="submitDigestSettings()"
-      style="width:100%;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Save</button>
-    <div id="digest-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:#8b949e;"></div>
+      style="width:100%;background:var(--color-accent-strong);color:var(--color-button-text);border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Save</button>
+    <div id="digest-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--color-text-muted);"></div>
+
+    <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Appearance</h2>
+    <div style="display:flex;gap:var(--space-2);">
+      <button id="theme-btn-dark" onclick="setTheme('dark')"
+        style="flex:1;padding:12px;border-radius:6px;font-size:var(--text-base);
+        border:1px solid var(--color-border);
+        background:${uiSettings.theme === 'dark' ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)'};
+        color:${uiSettings.theme === 'dark' ? 'var(--color-button-text)' : 'var(--color-text-primary)'};">Dark</button>
+      <button id="theme-btn-light" onclick="setTheme('light')"
+        style="flex:1;padding:12px;border-radius:6px;font-size:var(--text-base);
+        border:1px solid var(--color-border);
+        background:${uiSettings.theme === 'light' ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)'};
+        color:${uiSettings.theme === 'light' ? 'var(--color-button-text)' : 'var(--color-text-primary)'};">Light</button>
+    </div>
   `;
   document.getElementById('content').innerHTML = html;
+}
+
+async function setTheme(theme) {
+  // Apply instantly — no reason to wait for the server round-trip before
+  // the person actually sees the change they just asked for.
+  document.documentElement.setAttribute('data-theme', theme);
+
+  document.getElementById('theme-btn-dark').style.background = theme === 'dark' ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)';
+  document.getElementById('theme-btn-dark').style.color = theme === 'dark' ? 'var(--color-button-text)' : 'var(--color-text-primary)';
+  document.getElementById('theme-btn-light').style.background = theme === 'light' ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)';
+  document.getElementById('theme-btn-light').style.color = theme === 'light' ? 'var(--color-button-text)' : 'var(--color-text-primary)';
+
+  try {
+    await fetch('/api/settings/ui', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme })
+    });
+  } catch (err) {
+    showErrorPanel('Could not save theme preference — could not reach the server', err.message);
+  }
 }
 
 async function submitDigestSettings() {
@@ -1551,6 +1657,9 @@ render(currentState());
 
 @app.route("/")
 def index():
+    theme = ui_preferences.get_preferences().get("theme", "dark")
+    if theme == "light":
+        return _PAGE_TEMPLATE.replace("<html>", '<html data-theme="light">', 1)
     return _PAGE_TEMPLATE
 
 
