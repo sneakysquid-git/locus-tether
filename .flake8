@@ -17,8 +17,15 @@ exclude = venv,.git,__pycache__
 # it, and risks awkward mid-sentence breaks. webapp.py contains large
 # inline HTML/JS template literals, which read better as complete lines
 # than force-wrapped across several.
+# S101 (assert used): bandit flags this by default since asserts silently
+# vanish under Python's -O optimized mode — a real concern for production
+# code that depends on them for validation, but not applicable to test
+# files, where assert is simply how pytest tests are written. Excluding
+# it for tests/ is bandit's own documented recommendation, not a
+# workaround.
 per-file-ignores =
     digest/digest.py:E402
     speech_coach/speech_coach.py:E402
     webapp/webapp.py:E402,E501
     pipeline/prompts.py:E501
+    tests/*:S101

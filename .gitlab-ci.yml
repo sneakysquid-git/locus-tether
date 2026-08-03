@@ -1,18 +1,33 @@
 # .gitlab-ci.yml
-# Full CI pipeline: code review, security scanning, secret detection
+#
+# Deliberately trimmed from a earlier, more comprehensive version. That
+# version included pylint, mypy, GitLab's SAST template, a custom grep-
+# based code-review job, IaC-SAST, and container scanning — reasonable
+# defaults for a larger team project, but mismatched for this one:
+#   - pylint/mypy substantially overlapped with flake8 and were already
+#     allow_failure: true (never blocked anything)
+#   - SAST and the custom grep job substantially overlapped with the
+#     flake8-bandit checks already running as part of the flake8 job
+#   - IaC-SAST has minimal real surface here (a docker-compose file and a
+#     couple of systemd units, not Terraform/K8s manifests)
+#   - container scanning scans an image pushed to a registry, but nobody
+#     pulls a prebuilt image from this project — everyone self-hosting it
+#     builds the Dockerfile themselves, on their own hardware
+# What's left is scoped to this project's actual risk profile: real lint
+# findings, real regression tests, and the three checks whose failure
+# mode (a leaked credential, a known-vulnerable dependency, a license
+# conflict) is serious enough to justify automated coverage regardless of
+# project size.
 
 stages:
   - lint
   - test
   - build
   - security
-  - review
 
 variables:
   PYTHON_VERSION: "3.11"
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  # Container scanning — point to the image built in the build stage
-  CS_IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
 
 # ─── Cache ────────────────────────────────────────────────────────────────────
 .python-cache: &python-cache
@@ -22,7 +37,12 @@ variables:
       - .cache/pip
       - venv/
 
-# ─── Lint / Code Review ───────────────────────────────────────────────────────
+# ─── Lint ─────────────────────────────────────────────────────────────────────
+# Config lives in .flake8 (per-file-ignores for deliberate patterns: the
+# sys.path-before-import files, prompts.py/webapp.py's naturally-long
+# lines, and S101 for tests/ — assert is how pytest tests are written,
+# not a security concern there). CLI flags kept here too so the command
+# is self-explanatory without needing to open the config file.
 flake8:
   stage: lint
   image: python:$PYTHON_VERSION-slim
@@ -35,33 +55,7 @@ flake8:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-pylint:
-  stage: lint
-  image: python:$PYTHON_VERSION-slim
-  <<: *python-cache
-  before_script:
-    - pip install pylint -r requirements.txt
-  script:
-    - pylint **/*.py --fail-under=7.0 --disable=C0114,C0115,C0116 || true
-  allow_failure: true
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-mypy:
-  stage: lint
-  image: python:$PYTHON_VERSION-slim
-  <<: *python-cache
-  before_script:
-    - pip install mypy -r requirements.txt
-  script:
-    - mypy . --ignore-missing-imports --exclude venv
-  allow_failure: true
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-# ─── Unit Tests ───────────────────────────────────────────────────────────────
+# ─── Tests ────────────────────────────────────────────────────────────────────
 pytest:
   stage: test
   image: python:$PYTHON_VERSION-slim
@@ -81,7 +75,12 @@ pytest:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# ─── Build Docker Image ───────────────────────────────────────────────────────
+# ─── Build sanity check ───────────────────────────────────────────────────────
+# Confirms the Dockerfile still builds successfully — nothing more. Not
+# pushed anywhere: this project isn't distributed as a prebuilt image,
+# so there's no registry for a real image to live in, and no container
+# to scan (see the note at the top of this file for why container
+# scanning was dropped along with this).
 build:
   stage: build
   image: docker:27
@@ -89,66 +88,27 @@ build:
     - docker:27-dind
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
-  before_script:
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
   script:
-    - docker build -t "$CS_IMAGE" -f docker/Dockerfile .
-    - docker push "$CS_IMAGE"
+    - docker build -f docker/Dockerfile .
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# ─── Security Scanning (GitLab Ultimate templates) ────────────────────────────
-
-# Static Application Security Testing (SAST)
+# ─── Security scanning ────────────────────────────────────────────────────────
 include:
-  - template: Jobs/SAST.gitlab-ci.yml
   - template: Jobs/Secret-Detection.gitlab-ci.yml
   - template: Jobs/Dependency-Scanning.v2.gitlab-ci.yml
-  - template: Jobs/Container-Scanning.gitlab-ci.yml
-  - template: Jobs/SAST-IaC.gitlab-ci.yml
-
-# Override SAST to run in the security stage
-sast:
-  stage: security
 
 secret_detection:
   stage: security
 
+# The v2 template's job is named "dependency-scanning" (hyphen) — the
+# original "dependency_scanning" (underscore) override never matched it,
+# silently creating a separate, empty job with no script that failed
+# outright instead of actually configuring the real one.
 dependency-scanning:
   stage: security
 
-container_scanning:
-  stage: security
-  variables:
-    CS_IMAGE: "$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA"
-  needs:
-    - build
-
-iac-sast:
-  stage: security
-
-# ─── AI-Assisted Code Review (MR only) ───────────────────────────────────────
-code_review:
-  stage: review
-  image: python:$PYTHON_VERSION-slim
-  before_script:
-    - pip install requests
-  script:
-    - |
-      echo "Running diff-based code review checks..."
-      # Fail on common Python anti-patterns using grep
-      git diff origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME...HEAD -- '*.py' | \
-        grep -E "^\+" | \
-        grep -vE "^\+\+" | \
-        grep -E "(eval\(|exec\(|__import__\(|pickle\.loads|subprocess\.call\(shell=True)" && \
-        echo "WARNING: Potentially dangerous patterns detected in diff" || \
-        echo "No dangerous patterns found."
-  allow_failure: true
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-
-# ─── License Compliance ───────────────────────────────────────────────────────
 license_scanning:
   stage: security
   image: python:$PYTHON_VERSION-slim
@@ -156,8 +116,12 @@ license_scanning:
     - pip install pip-licenses
   script:
     - pip install -r requirements.txt -r docker/requirements-docker.txt
+    # NOTE: "table" is not a valid --format value in current pip-licenses
+    # releases (removed/renamed in a past major version bump) — this
+    # failed outright before being caught. "plain" is the closest
+    # equivalent: a simple, readable text table.
     - pip-licenses --format=json --output-file=licenses.json
-    - pip-licenses --format=table
+    - pip-licenses --format=plain
   artifacts:
     paths:
       - licenses.json
@@ -165,4 +129,3 @@ license_scanning:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-

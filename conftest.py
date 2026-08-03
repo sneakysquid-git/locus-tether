@@ -6,7 +6,6 @@ at runtime (see e.g. webapp.py's own sys.path.insert calls), but pytest
 needs this done once, up front, before collection, for imports across
 these directories to resolve correctly in tests.
 """
-import os
 import sys
 from pathlib import Path
 
