@@ -121,7 +121,6 @@ productivity and analysis layer built on top.
 ## System architecture (how it actually runs)
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'background': '#f6f8fa' }}}%%
 flowchart TB
     Omi(["Omi wearable"])
     Sync[["Syncthing"]]
@@ -150,8 +149,8 @@ flowchart TB
 
     Omi -.->|"blocked — no hardware yet"| Sync
     Sync -->|"proven — manual test folder"| Inbox
-    Thor -->|SMTP| EmailInbox
-    Thor <-->|"tailscale serve"| You
+    Digest -->|SMTP| EmailInbox
+    Webapp <-->|"tailscale serve"| You
 
     classDef done fill:#1b4332,stroke:#0d2818,color:#ffffff,stroke-width:2px
     classDef planned fill:#1d3557,stroke:#0d1b2a,color:#ffffff,stroke-width:2px
@@ -160,6 +159,8 @@ flowchart TB
     class Omi planned
     class Sync,Inbox,Transcribe,Transcripts,Analysis,Digest,Webapp,TodoState done
     class You,EmailInbox extern
+
+    style Thor fill:#30363d,stroke:#8b949e,color:#ffffff,stroke-width:1px
 ```
 
 🟢 **Dark green: built, tested, working end-to-end** on real hardware with
