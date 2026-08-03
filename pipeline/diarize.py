@@ -317,7 +317,7 @@ def extract_enrollment_embedding(audio_path: Path) -> Optional[list]:
         for _, row in diarize_segments.iterrows():
             spk = row["speaker"]
             speaking_time[spk] = speaking_time.get(spk, 0.0) + (row["end"] - row["start"])
-        dominant_speaker = max(speaking_time, key=speaking_time.get)
+        dominant_speaker = max(speaking_time, key=lambda spk: speaking_time[spk])
         return list(speaker_embeddings[dominant_speaker])
     except Exception as e:
         log.warning("Could not determine dominant speaker in enrollment sample: %s", e)

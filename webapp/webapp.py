@@ -23,13 +23,14 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_file
 import io
 import shutil
 import subprocess  # noqa: S404 — see the one call site below for why this is safe
 import urllib.error
 import urllib.request
 import zipfile
+
+from flask import Flask, abort, jsonify, request, send_file
 
 # pipeline/ holds config.py, data_store.py, integrations.py — shared core
 # modules used by webapp.py, digest.py, and speech_coach.py alike. Added to
@@ -433,7 +434,7 @@ def api_update_conversation(stem: str):
             # rather than crash on a bare None a line further down.
             raise RuntimeError("Save appeared to succeed, but reloading the saved file failed")
         response_body = _full_conversation(updated)
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         # Log the full traceback server-side (visible via journalctl -u
         # webapp) AND return the actual reason to the client directly —
         # a generic 500 page with no detail just means another round-trip
@@ -510,7 +511,7 @@ def api_reprocess_conversation(stem: str):
             coaching_path = config.TRANSCRIPTS_DIR / f"{stem}.speech_coach.json"
             coaching_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
             coaching_ran = True
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             log.exception("Reprocess: coaching failed for %s (analysis still succeeded)", stem)
 
     return jsonify({"stem": stem, "reprocessed": True, "coaching_ran": coaching_ran})
@@ -774,7 +775,7 @@ def api_system_status():
     try:
         result = subprocess.run(  # noqa: S603, S607
             ["docker", "ps", "--filter", "name=omi-pipeline", "--format", "{{.Status}}"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, check=False,
         )
         output = result.stdout.strip()
         status["pipeline_container"] = {"running": bool(output), "status_text": output or None}

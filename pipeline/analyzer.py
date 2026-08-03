@@ -44,21 +44,23 @@ def _is_placeholder_non_decision(text: str) -> bool:
 
 def _find_unsupported_numbers(facts: list, source_text: str) -> list:
     """
-    Logging-only sanity check, NOT a filter — flags any key_facts entry
-    containing a number that doesn't appear in the source transcript IN
-    THE SAME SHAPE (a plain count vs. a percentage). Deliberately checks
-    shape, not just raw substring presence: a naive substring check can't
-    tell "100" (a container count) from "100%" (a coverage percentage) —
-    since "100" trivially appears inside "100%" too — which is exactly the
-    fabrication pattern confirmed in a real test (see #40): the model took
-    "100% coverage" and turned it into a fabricated "100 containers."
+    Flags any key_facts entry containing a number that doesn't appear in
+    the source transcript in the same shape (a plain count vs. a
+    percentage) — the caller actively removes flagged facts (see #40:
+    this was logging-only at first, then upgraded to real filtering once
+    the exact fabrication pattern recurred on a second real recording with
+    zero false positives observed). Deliberately checks shape, not just
+    raw substring presence: a naive substring check can't tell "100" (a
+    container count) from "100%" (a coverage percentage) — since "100"
+    trivially appears inside "100%" too — which is exactly the fabrication
+    pattern confirmed in a real test: the model took "100% coverage" and
+    turned it into a fabricated "100 containers."
 
-    Still deliberately NOT a filter: a number phrased differently in the
-    fact than in the transcript (e.g. "100" vs "one hundred") would still
-    be a false positive here, and silently dropping a legitimate fact is
-    worse than an occasional missed warning. This exists purely so we can
-    monitor, over real usage, how often this actually happens before
-    deciding whether stronger enforcement is worth the false-positive risk.
+    Still a real limitation worth knowing: a number phrased differently in
+    the fact than in the transcript (e.g. "100" vs "one hundred") would
+    still be a false positive here, silently dropping a legitimate fact.
+    Accepted trade-off given the alternative (letting the confirmed
+    fabrication pattern through) is worse.
     """
     flagged = []
     source_plain = source_text.replace(",", "")

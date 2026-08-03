@@ -20,7 +20,7 @@ from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
@@ -503,6 +503,7 @@ def send_email(target_date: date, markdown: str, html_body: str) -> None:
     # Port 587 (and most others) = plain connection, then upgrade via STARTTLS.
     # Covers the two overwhelmingly common conventions without needing the
     # user to specify which mode separately from the port number itself.
+    server: Union[smtplib.SMTP, smtplib.SMTP_SSL]
     if config.DIGEST_SMTP_PORT == 465:
         server = smtplib.SMTP_SSL(config.DIGEST_SMTP_HOST, config.DIGEST_SMTP_PORT, timeout=30)
     else:
