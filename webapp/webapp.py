@@ -20,7 +20,7 @@ or as a persistent service — see systemd/webapp.service.
 import json
 import logging
 import sys
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request
@@ -69,6 +69,7 @@ def _condensed_conversation(a: dict) -> dict:
     return {
         "stem": a.get("_stem", ""),
         "date": a.get("_date", ""),
+        "time": a.get("_time", ""),
         "title": a.get("title", a.get("_stem", "")),
         "category": a.get("category", "uncategorized"),
         "preview": preview,
@@ -79,9 +80,24 @@ def _condensed_conversation(a: dict) -> dict:
 def _full_conversation(a: dict) -> dict:
     stem = a.get("_stem", "")
     speech = data_store.load_speech_coaching_by_stem(stem)
+
+    # Approximate start/end time span: "_time"/"_timestamp" reflect when
+    # the file was written (roughly end-of-processing, shortly after the
+    # recording itself ended) — an honest approximation, not a precisely
+    # recorded wall-clock start, but genuinely useful for telling same-day
+    # recordings apart and understanding roughly when something happened.
+    end_time = a.get("_time", "")
+    start_time = None
+    duration = data_store.get_recording_duration(stem)
+    if duration and a.get("_timestamp"):
+        start_dt = datetime.fromtimestamp(a["_timestamp"] - duration)
+        start_time = start_dt.strftime("%-I:%M %p")
+
     return {
         "stem": stem,
         "date": a.get("_date", ""),
+        "time": end_time,
+        "start_time": start_time,
         "title": a.get("title", stem),
         "category": a.get("category", "uncategorized"),
         "overview": a.get("overview", ""),
@@ -848,7 +864,7 @@ async function renderConversationsList() {
     html += `<div class="list-row" onclick="goDetail('conversations', '${esc(c.stem)}')">
       <div style="display:flex;justify-content:space-between;">
         <div style="font-weight:600;">${categoryIcon(c.category)} ${esc(c.title)}</div>
-        <div class="date-label">${esc(c.date)}</div>
+        <div class="date-label">${esc(c.date)} ${esc(c.time)}</div>
       </div>
       <span class="badge" style="background:${color};">${esc(c.category)}</span>
       <p style="font-size:var(--text-sm);color:#8b949e;margin:var(--space-2) 0 0;">${esc(c.preview)}</p>
@@ -871,7 +887,7 @@ async function renderConversationDetail(stem) {
 
   let html = `<h1 style="margin-top:var(--space-2);justify-content:flex-start;gap:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</h1>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);">
-      <div class="date-label">${esc(c.date)}</div>
+      <div class="date-label">${esc(c.date)} — ${c.start_time ? esc(c.start_time) + ' to ' + esc(c.time) : esc(c.time)}</div>
       <div>
         <button onclick="renderConversationEditForm('${stem}')"
           style="background:#21262d;color:#58a6ff;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Edit</button>

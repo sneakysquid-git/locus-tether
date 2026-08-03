@@ -115,14 +115,39 @@ def build_analysis_text(result: Dict[str, Any]) -> str:
 
     Falls back to the flat text unchanged when no segment has a real
     speaker label (diarization disabled, or failed and fell back softly).
+
+    Since #37 (voice enrollment), a matched speaker's segments carry their
+    REAL name instead of an anonymous SPEAKER_NN code — that real name is
+    safe to mention directly in this note (unlike anonymous codes, which
+    are deliberately withheld from the model to prevent it fabricating
+    participant entries). Without this, a correctly-identified speaker
+    would never actually reach the LLM at all, since this function only
+    passed along a bare count before — real-world testing surfaced exactly
+    this gap: diarization correctly recognized a known voice, but the
+    analysis had no way to know, since that information never made it into
+    the text the model actually reads.
     """
     segments = result.get("segments", [])
     speakers = {seg.get("speaker") for seg in segments if seg.get("speaker")}
     text = result.get("text", "")
 
-    if len(speakers) > 1:
-        return f"[This conversation had {len(speakers)} distinct speakers.]\n\n{text}"
-    return text
+    if len(speakers) <= 1:
+        return text
+
+    known_names = sorted(s for s in speakers if not s.startswith("SPEAKER_"))
+    anonymous_count = len(speakers) - len(known_names)
+
+    if known_names and anonymous_count:
+        note = (
+            f"[This conversation had {len(speakers)} distinct speakers, "
+            f"including {', '.join(known_names)} (the other {anonymous_count} unidentified).]"
+        )
+    elif known_names:
+        note = f"[This conversation had {len(speakers)} distinct speakers: {', '.join(known_names)}.]"
+    else:
+        note = f"[This conversation had {len(speakers)} distinct speakers.]"
+
+    return f"{note}\n\n{text}"
 
 
 def write_transcript(result: Dict[str, Any], stem: str) -> None:

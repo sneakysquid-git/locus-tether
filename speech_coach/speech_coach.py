@@ -110,7 +110,25 @@ def main():
         print("Usage: python3 speech_coach.py <path-to-transcript.json>")
         sys.exit(1)
 
-    transcript_path = Path(sys.argv[1])
+    transcript_path = Path(sys.argv[1]).resolve()
+
+    # Defensive check: speaker_profiles.json (and everything else this
+    # script needs) lives under config.TRANSCRIPTS_DIR, which depends on
+    # OMI_PIPELINE_BASE being set correctly. Forgetting to export it before
+    # running this manually is an easy, understandable mistake — and
+    # without this check, the failure mode is completely silent: it just
+    # looks in the wrong place, finds nothing, and reports "no main user
+    # enrolled" even when one genuinely is, which is actively misleading
+    # about what's actually wrong.
+    if transcript_path.parent.resolve() != config.TRANSCRIPTS_DIR.resolve():
+        print(
+            f"WARNING: this transcript is at {transcript_path.parent}, but "
+            f"config.TRANSCRIPTS_DIR resolves to {config.TRANSCRIPTS_DIR} — "
+            f"OMI_PIPELINE_BASE is probably not set correctly for this shell. "
+            f"Voice matching/enrollment lookups will likely fail silently. "
+            f"Try: export OMI_PIPELINE_BASE=~/omi-data (or wherever your real data lives)\n"
+        )
+
     transcript = speech_metrics.load_transcript(transcript_path)
 
     filtered_transcript = speech_metrics.filter_to_main_user(transcript)

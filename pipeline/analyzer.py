@@ -130,12 +130,19 @@ def analyze_transcript(transcript_text: str) -> dict:
         d for d in result.get("decisions_made", []) if not _is_placeholder_non_decision(d)
     ]
 
-    # Monitoring only (see #40) — logs, doesn't strip, since a naive number
-    # match risks false positives on facts phrased differently than the
-    # source (e.g. "100" vs "one hundred").
-    suspicious = _find_unsupported_numbers(result.get("key_facts", []), transcript_text)
+    # Upgraded from logging-only to active filtering (see #40) — this
+    # exact fabrication pattern (a percentage repurposed into a fabricated
+    # count, "100% coverage" -> "100 containers") recurred on a SECOND
+    # real recording, confirming it's a real, repeating failure mode, not
+    # a one-off. The shape-matching check has shown zero false positives
+    # across both real occurrences and unit testing (correctly leaves
+    # alone facts whose numbers genuinely match the source), so removing
+    # rather than just flagging is justified by actual evidence now.
+    key_facts = result.get("key_facts", [])
+    suspicious = _find_unsupported_numbers(key_facts, transcript_text)
     if suspicious:
-        log.warning("key_facts may contain a number not found in the source transcript: %s", suspicious)
+        log.warning("Removed key_facts with a number not found in the source transcript: %s", suspicious)
+        result["key_facts"] = [f for f in key_facts if f not in suspicious]
 
     return result
 

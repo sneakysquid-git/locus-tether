@@ -20,21 +20,34 @@ import config
 
 def load_all_analyses() -> list[dict]:
     """
-    Every *.analysis.json in TRANSCRIPTS_DIR, most recent first. Each dict
-    includes '_stem' (filename stem, for cross-referencing) and '_date'
-    (the file's modification date, as an ISO string — used for display and
-    for date-filtering by callers like load_day_analyses below).
+    Every *.analysis.json in TRANSCRIPTS_DIR, most recent first — genuinely
+    chronological, not just alphabetical-by-filename. Each dict includes:
+      - '_stem': filename stem, for cross-referencing
+      - '_date': the file's modification date, ISO string (date only — used
+        for display and for date-filtering by callers like load_day_analyses)
+      - '_time': the file's modification time, formatted for display
+        (e.g. "2:47 PM")
+      - '_timestamp': full-precision mtime (float, unix epoch) — the ACTUAL
+        sort key. Sorting by '_date' alone was a real bug: multiple same-day
+        conversations (the common case during any real testing session)
+        would tie on date, and Python's stable sort would then fall back to
+        whatever order glob() happened to return — alphabetical by
+        filename, not chronological — which is exactly what surfaced this.
     """
     results = []
-    for path in sorted(config.TRANSCRIPTS_DIR.glob("*.analysis.json")):
+    for path in config.TRANSCRIPTS_DIR.glob("*.analysis.json"):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue  # skip anything unreadable rather than crash the caller
+        mtime = path.stat().st_mtime
+        dt = datetime.fromtimestamp(mtime)
         data["_stem"] = path.stem.removesuffix(".analysis")
-        data["_date"] = datetime.fromtimestamp(path.stat().st_mtime).date().isoformat()
+        data["_date"] = dt.date().isoformat()
+        data["_time"] = dt.strftime("%-I:%M %p")
+        data["_timestamp"] = mtime
         results.append(data)
-    results.sort(key=lambda d: d["_date"], reverse=True)
+    results.sort(key=lambda d: d["_timestamp"], reverse=True)
     return results
 
 
@@ -47,8 +60,12 @@ def load_analysis_by_stem(stem: str) -> Optional[dict]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+    mtime = path.stat().st_mtime
+    dt = datetime.fromtimestamp(mtime)
     data["_stem"] = stem
-    data["_date"] = datetime.fromtimestamp(path.stat().st_mtime).date().isoformat()
+    data["_date"] = dt.date().isoformat()
+    data["_time"] = dt.strftime("%-I:%M %p")
+    data["_timestamp"] = mtime
     return data
 
 
@@ -64,6 +81,21 @@ def save_analysis(stem: str, data: dict) -> None:
     path = config.TRANSCRIPTS_DIR / f"{stem}.analysis.json"
     to_write = {k: v for k, v in data.items() if not k.startswith("_")}
     path.write_text(json.dumps(to_write, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def get_recording_duration(stem: str) -> Optional[float]:
+    """Seconds, from the raw transcript's own duration field — used to
+    compute an approximate start time (end time minus duration) for
+    display, since we don't separately record the true wall-clock start
+    of a recording anywhere."""
+    path = config.TRANSCRIPTS_DIR / f"{stem}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data.get("duration")
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def get_speaker_count(stem: str) -> Optional[int]:
