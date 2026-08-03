@@ -101,6 +101,16 @@ DIARIZATION_CACHE_DIR = os.environ.get("OMI_DIARIZATION_CACHE_DIR", "/root/.cach
 MODEL_KEEP_ALIVE_SECONDS = int(os.environ.get("OMI_MODEL_KEEP_ALIVE_SECONDS", "600"))
 MODEL_EVICTION_INTERVAL_SECONDS = max(30, int(os.environ.get("OMI_MODEL_EVICTION_INTERVAL_SECONDS", "60")))
 
+# --- Automatic speech coaching (Phase 6 + #37) -----------------------------
+# Originally deliberately manual-only: reviewing every casual voice memo for
+# speaking style isn't useful the way transcribing/summarizing every one is.
+# Now that voice enrollment (#37) can identify the main user specifically,
+# automatic coaching makes more sense — it only runs when the main user is
+# actually detected as a speaker in that particular recording, so a random
+# voice memo where they're not present still won't get pointlessly coached;
+# this isn't "coach every recording," it's "coach every recording of me."
+AUTO_SPEECH_COACHING_ENABLED = os.environ.get("OMI_AUTO_SPEECH_COACHING_ENABLED", "true").lower() == "true"
+
 # --- Ollama (Phase 4: transcript -> structured analysis) -----------------
 # Ollama runs natively on the Thor host (not containerized), so the pipeline
 # container reaches it via the host's network — see docker-compose.yml's
@@ -135,5 +145,27 @@ DIGEST_EMAIL_TO = os.environ.get("OMI_DIGEST_EMAIL_TO", "")
 
 
 def ensure_dirs() -> None:
+    """
+    Creates every shared data directory if missing, AND explicitly makes
+    each one permissive (0o777) every time this runs — not just on first
+    creation.
+
+    Why explicitly, beyond just relying on umask 000 in entrypoint.sh: this
+    function is called from BOTH sides of the host/container boundary
+    (webapp.py natively on the host, and the pipeline inside Docker). When
+    Docker Compose brings up a NEW bind-mounted directory that doesn't
+    exist on the host yet, Docker itself auto-creates it — before our own
+    umask setting ever gets a chance to apply — typically root-owned with
+    restrictive default permissions. That's exactly what happened when
+    ENROLLMENT_DIR was added: it never got the one-time manual permission
+    fix, since it didn't exist when that was run. Calling chmod here every
+    time (cheap, idempotent) means any future new directory added to this
+    list is automatically covered too, without needing another manual
+    one-time fix.
+    """
     for d in (INBOX_DIR, PROCESSING_DIR, ARCHIVE_DIR, TRANSCRIPTS_DIR, FAILED_DIR, DIGESTS_DIR, ENROLLMENT_DIR):
         d.mkdir(parents=True, exist_ok=True)
+        try:
+            d.chmod(0o777)
+        except OSError:
+            pass  # best-effort — e.g. no permission to chmod something we don't own; not fatal

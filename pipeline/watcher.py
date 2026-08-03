@@ -29,6 +29,7 @@ import json
 import logging
 import queue
 import shutil
+import sys
 import threading
 import time
 from pathlib import Path
@@ -41,6 +42,17 @@ import config
 import diarize
 import speaker_profiles
 import transcribe
+
+# speech_coach/ is a sibling directory to pipeline/ (this file's own
+# directory) — same cross-directory import pattern speech_coach.py itself
+# already uses in reverse to reach pipeline/. Inside the container, all
+# these files actually sit flat in /app, so this insert becomes harmless
+# dead code there (points at a directory that doesn't exist inside the
+# container) — the import succeeds anyway via Python's default behavior of
+# adding a script's own directory to sys.path, same as every other
+# same-directory import already relied on throughout this file.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "speech_coach"))
+import speech_coach  # noqa: E402 — must follow the sys.path insert above
 
 log = logging.getLogger("omi.watcher")
 
@@ -142,6 +154,28 @@ def process_one(path: Path) -> None:
     log.info("Analyzing: %s", processing_path.name)
     analysis_text = transcribe.build_analysis_text(result)
     analyzer.analyze_and_write(analysis_text, stem)
+
+    # Automatic speech coaching (#37 follow-up) — also a soft-failure step,
+    # same reasoning as analysis above. Only runs when the main user is
+    # actually detected as a speaker in THIS recording: not "coach every
+    # recording," just "coach every recording of me" — a random voice memo
+    # where they're not present is correctly skipped, same as before this
+    # existed.
+    if config.AUTO_SPEECH_COACHING_ENABLED:
+        main_user = speaker_profiles.get_main_user()
+        segment_speakers = {seg.get("speaker") for seg in result.get("segments", [])}
+        if main_user and main_user in segment_speakers:
+            log.info("Running automatic speech coaching for %s: %s", main_user, processing_path.name)
+            try:
+                transcript_json_path = config.TRANSCRIPTS_DIR / f"{stem}.json"
+                report = speech_coach.generate_coaching_report(transcript_json_path)
+                coaching_path = config.TRANSCRIPTS_DIR / f"{stem}.speech_coach.json"
+                coaching_path.write_text(
+                    json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8"
+                )
+                log.info("Wrote automatic coaching report: %s", coaching_path.name)
+            except Exception:
+                log.exception("Automatic speech coaching failed for %s (transcript/analysis unaffected)", stem)
 
     shutil.move(str(processing_path), str(config.ARCHIVE_DIR / processing_path.name))
     log.info("Done: %s", processing_path.name)

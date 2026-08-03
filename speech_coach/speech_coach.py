@@ -66,6 +66,29 @@ def get_coaching_feedback(transcript: dict, metrics: dict) -> dict:
     return result
 
 
+def generate_coaching_report(transcript_path: Path) -> dict:
+    """
+    Core logic, importable by both the CLI (main(), below) and the
+    automatic watcher.py integration (#37 follow-up: run this
+    automatically whenever the main user is detected in a recording,
+    rather than requiring a manual invocation every time).
+
+    Raises on any failure — deliberately doesn't catch/report errors
+    itself, since CLI and automatic callers need to handle failure
+    differently (CLI prints and exits; watcher.py logs and continues,
+    the same soft-failure treatment as every other optional pipeline
+    step, so a coaching hiccup never undoes a successful transcription).
+
+    Returns {"metrics": ..., "feedback": ...} — the same shape written to
+    disk as <stem>.speech_coach.json.
+    """
+    transcript = speech_metrics.load_transcript(transcript_path)
+    filtered_transcript = speech_metrics.filter_to_main_user(transcript)
+    metrics = speech_metrics.analyze_speech_metrics(filtered_transcript)
+    feedback = get_coaching_feedback(filtered_transcript, metrics)
+    return {"metrics": metrics, "feedback": feedback}
+
+
 def print_report(metrics: dict, feedback: dict) -> None:
     pace = metrics["pace"]
     pauses = metrics["pauses"]
@@ -130,7 +153,6 @@ def main():
         )
 
     transcript = speech_metrics.load_transcript(transcript_path)
-
     filtered_transcript = speech_metrics.filter_to_main_user(transcript)
     if filtered_transcript is not transcript:
         print(
@@ -140,16 +162,13 @@ def main():
         )
     else:
         print("No main user enrolled (or not detected in this recording) — analyzing the full transcript, as before.")
-    transcript = filtered_transcript
 
-    metrics = speech_metrics.analyze_speech_metrics(transcript)
-    feedback = get_coaching_feedback(transcript, metrics)
-
-    print_report(metrics, feedback)
+    report = generate_coaching_report(transcript_path)
+    print_report(report["metrics"], report["feedback"])
 
     out_path = transcript_path.with_suffix(".speech_coach.json")
     out_path.write_text(
-        json.dumps({"metrics": metrics, "feedback": feedback}, indent=2, ensure_ascii=False),
+        json.dumps(report, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
     print(f"\nWrote: {out_path}")

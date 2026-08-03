@@ -149,6 +149,7 @@ RUN pip3 install --break-system-packages --no-cache-dir torch \
     && pip3 install --break-system-packages --no-cache-dir --force-reinstall --no-deps torch torchaudio torchvision
 
 COPY pipeline/config.py pipeline/transcribe.py pipeline/watcher.py pipeline/prompts.py pipeline/analyzer.py pipeline/data_store.py pipeline/diarize.py pipeline/speaker_profiles.py ./
+COPY speech_coach/speech_coach.py speech_coach/speech_metrics.py ./
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
