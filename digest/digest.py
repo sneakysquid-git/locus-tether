@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
 import config
 import data_store
+import digest_preferences
 
 log = logging.getLogger("omi.digest")
 
@@ -437,13 +438,27 @@ def send_email(target_date: date, markdown: str, html_body: str) -> None:
     text+HTML body, plus a PDF attachment (with a genuinely working table
     of contents — see render_pdf's docstring).
 
-    Does nothing if DIGEST_EMAIL_ENABLED is false. Raises on failure rather
-    than swallowing errors — caller decides how to handle that (see main(),
+    Checks webapp-configured preferences (digest_preferences.py) first —
+    settable from the Settings page — falling back to the original
+    env-var-based config (DIGEST_EMAIL_ENABLED/DIGEST_EMAIL_TO) if nothing's
+    been explicitly saved via the webapp yet, so this stays backward
+    compatible with anyone who prefers just editing .env.digest directly.
+
+    Does nothing if not enabled either way. Raises on failure rather than
+    swallowing errors — caller decides how to handle that (see main(),
     which logs and continues rather than treating a failed send as fatal,
     since the markdown file itself was already written successfully either
     way).
     """
-    if not config.DIGEST_EMAIL_ENABLED:
+    prefs = digest_preferences.get_preferences()
+    if prefs is not None:
+        enabled = prefs["enabled"]
+        email_to = prefs["email"]
+    else:
+        enabled = config.DIGEST_EMAIL_ENABLED
+        email_to = config.DIGEST_EMAIL_TO
+
+    if not enabled:
         return
 
     missing = [
@@ -453,10 +468,11 @@ def send_email(target_date: date, markdown: str, html_body: str) -> None:
             ("OMI_DIGEST_SMTP_USER", config.DIGEST_SMTP_USER),
             ("OMI_DIGEST_SMTP_PASSWORD", config.DIGEST_SMTP_PASSWORD),
             ("OMI_DIGEST_EMAIL_FROM", config.DIGEST_EMAIL_FROM),
-            ("OMI_DIGEST_EMAIL_TO", config.DIGEST_EMAIL_TO),
         ]
         if not value
     ]
+    if not email_to:
+        missing.append("destination email (set via Settings, or OMI_DIGEST_EMAIL_TO)")
     if missing:
         raise RuntimeError(
             f"DIGEST_EMAIL_ENABLED is true but these are unset: {', '.join(missing)}. "
@@ -466,7 +482,7 @@ def send_email(target_date: date, markdown: str, html_body: str) -> None:
     msg = MIMEMultipart("mixed")
     msg["Subject"] = f"LocusTether Digest — {target_date.isoformat()}"
     msg["From"] = config.DIGEST_EMAIL_FROM
-    msg["To"] = config.DIGEST_EMAIL_TO
+    msg["To"] = email_to
 
     body = MIMEMultipart("alternative")
     # Plain text part MUST be attached before the HTML part — email clients
@@ -497,7 +513,7 @@ def send_email(target_date: date, markdown: str, html_body: str) -> None:
 
     try:
         server.login(config.DIGEST_SMTP_USER, config.DIGEST_SMTP_PASSWORD)
-        server.sendmail(config.DIGEST_EMAIL_FROM, [config.DIGEST_EMAIL_TO], msg.as_string())
+        server.sendmail(config.DIGEST_EMAIL_FROM, [email_to], msg.as_string())
     finally:
         server.quit()
 
@@ -527,8 +543,11 @@ def main():
 
     try:
         send_email(target_date, markdown, html_body)
-        if config.DIGEST_EMAIL_ENABLED:
-            print(f"Emailed digest to {config.DIGEST_EMAIL_TO}")
+        prefs = digest_preferences.get_preferences()
+        enabled = prefs["enabled"] if prefs is not None else config.DIGEST_EMAIL_ENABLED
+        email_to = prefs["email"] if prefs is not None else config.DIGEST_EMAIL_TO
+        if enabled:
+            print(f"Emailed digest to {email_to}")
     except Exception as e:
         # The markdown file already exists at this point regardless — a
         # failed send shouldn't be treated as the whole digest job failing.

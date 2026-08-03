@@ -38,6 +38,7 @@ import integrations
 import todo_state
 import conversation_state
 import speaker_profiles
+import digest_preferences
 
 log = logging.getLogger("omi.webapp")
 
@@ -515,6 +516,31 @@ def api_set_main_speaker(name: str):
 def api_delete_speaker(name: str):
     speaker_profiles.delete_profile(name)
     return jsonify({"deleted": name})
+
+
+# --- API: Settings — digest email preferences -------------------------------
+
+@app.route("/api/settings/digest")
+def api_get_digest_settings():
+    prefs = digest_preferences.get_preferences()
+    if prefs is None:
+        # Nothing explicitly saved via the webapp yet — reflect whatever
+        # the env-var config currently has, so the Settings UI shows
+        # accurate current state rather than defaulting to blank/off when
+        # a host-level .env.digest config might already be active.
+        prefs = {"enabled": config.DIGEST_EMAIL_ENABLED, "email": config.DIGEST_EMAIL_TO}
+    return jsonify(prefs)
+
+
+@app.route("/api/settings/digest", methods=["POST"])
+def api_save_digest_settings():
+    body = request.get_json(force=True) or {}
+    enabled = bool(body.get("enabled", False))
+    email = (body.get("email") or "").strip()
+    if enabled and not email:
+        return jsonify({"error": "An email address is required to enable the daily digest"}), 400
+    digest_preferences.set_preferences(enabled, email)
+    return jsonify({"enabled": enabled, "email": email})
 
 
 # --- API: Feedback -----------------------------------------------------------
@@ -1310,6 +1336,7 @@ async function renderSettings() {
   setHeader('', false, true);
   document.getElementById('content').innerHTML = 'Loading...';
   const speakers = await (await fetch('/api/speakers')).json();
+  const digestSettings = await (await fetch('/api/settings/digest')).json();
 
   let html = '<h1 style="margin-top:var(--space-2);">Settings</h1>';
   html += '<h2 style="font-size:var(--text-md);">Voice Recognition</h2>';
@@ -1353,8 +1380,51 @@ async function renderSettings() {
     <button onclick="submitEnrollment()"
       style="width:100%;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Enroll</button>
     <div id="enroll-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:#8b949e;"></div>
+
+    <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Daily Digest Email</h2>
+    <p style="font-size:var(--text-sm);color:#8b949e;">Get an email summarizing each day's conversations and to-dos.</p>
+    <label style="display:flex;align-items:center;gap:var(--space-2);margin-bottom:var(--space-3);font-size:var(--text-base);">
+      <input type="checkbox" id="digest-enabled" ${digestSettings.enabled ? 'checked' : ''} style="width:auto;">
+      Send me a daily digest email
+    </label>
+    <label style="font-size:var(--text-sm);color:#8b949e;display:block;margin-bottom:var(--space-1);">Email address</label>
+    <input type="email" id="digest-email" placeholder="you@example.com" value="${esc(digestSettings.email || '')}"
+      style="width:100%;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#e6edf3;padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);box-sizing:border-box;">
+    <button onclick="submitDigestSettings()"
+      style="width:100%;background:#1f6feb;color:#fff;border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Save</button>
+    <div id="digest-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:#8b949e;"></div>
   `;
   document.getElementById('content').innerHTML = html;
+}
+
+async function submitDigestSettings() {
+  const enabled = document.getElementById('digest-enabled').checked;
+  const email = document.getElementById('digest-email').value.trim();
+  const statusEl = document.getElementById('digest-status');
+
+  if (enabled && !email) {
+    statusEl.textContent = 'Please enter an email address, or uncheck the box to opt out.';
+    return;
+  }
+
+  statusEl.textContent = 'Saving...';
+  try {
+    const res = await fetch('/api/settings/digest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled, email })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showErrorPanel('Could not save digest settings', body.error || `Server returned ${res.status}`);
+      statusEl.textContent = '';
+      return;
+    }
+    statusEl.textContent = enabled ? 'Saved — daily digest emails are on.' : 'Saved — digest emails are off.';
+  } catch (err) {
+    showErrorPanel('Could not save digest settings — could not reach the server', err.message);
+    statusEl.textContent = '';
+  }
 }
 
 async function submitEnrollment() {
