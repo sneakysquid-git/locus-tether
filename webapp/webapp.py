@@ -1374,7 +1374,7 @@ async function submitEnrollment() {
   pollEnrollmentStatus(name, statusEl);
 }
 
-async function pollEnrollmentStatus(name, statusEl) {
+async function pollEnrollmentStatus(name, statusEl, failedOnce) {
   const res = await fetch(`/api/speakers/enroll-status/${encodeURIComponent(name)}`);
   const data = await res.json();
 
@@ -1382,6 +1382,14 @@ async function pollEnrollmentStatus(name, statusEl) {
     statusEl.textContent = `${name} enrolled successfully.`;
     setTimeout(() => renderSettings(), 1000);
   } else if (data.status === 'failed') {
+    if (!failedOnce) {
+      // Don't trust a single "failed" reading — there's a narrow window
+      // where the enrollment file was just cleaned up but the profile
+      // write isn't visible on this exact poll yet. Recheck once more
+      // after a short delay before actually declaring failure.
+      setTimeout(() => pollEnrollmentStatus(name, statusEl, true), 1500);
+      return;
+    }
     showErrorPanel(
       'Enrollment did not complete',
       `Could not extract a voice fingerprint for ${name}. This can happen if diarization is disabled, ` +

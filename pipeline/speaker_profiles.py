@@ -33,7 +33,15 @@ MATCH_THRESHOLD = 0.75
 
 
 def _profiles_path() -> Path:
-    return config.BASE_DIR / "speaker_profiles.json"
+    # Deliberately TRANSCRIPTS_DIR, not bare BASE_DIR — this file needs to
+    # be visible on BOTH sides of the host/container boundary (written by
+    # watcher.py inside the container during enrollment, read by webapp.py
+    # natively on the host). BASE_DIR itself resolves differently on each
+    # side (~/omi-data on the host vs /app in the container) and /app is
+    # NOT bind-mounted as a whole — only specific subdirectories inside it
+    # are. TRANSCRIPTS_DIR is already correctly bind-mounted on both sides
+    # and already the shared home for other analysis-adjacent data.
+    return config.TRANSCRIPTS_DIR / "speaker_profiles.json"
 
 
 def _load() -> list:
