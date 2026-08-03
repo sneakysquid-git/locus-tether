@@ -1453,6 +1453,9 @@ async function addManualTodo() {
 }
 
 async function deleteManualTodo(itemId) {
+  if (!confirm('Delete this to-do? Unlike archiving a conversation, this is permanent — there\u2019s no undo.')) {
+    return;
+  }
   try {
     await fetch(`/api/todos/manual/${encodeURIComponent(itemId)}`, { method: 'DELETE' });
     renderTodos();
