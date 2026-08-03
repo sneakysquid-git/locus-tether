@@ -1,5 +1,7 @@
 # LocusTether: A Fully Local AI Memory Pipeline for the Omi Wearable
 
+
+
 Locus: 
 a: the place where something is situated or occurs : site, location
 b: a center of activity, attention, or concentration
@@ -7,6 +9,8 @@ b: a center of activity, attention, or concentration
 Tether: 
 a: a line (as of rope or chain) by which an animal is fastened so as to restrict its range of movement
 b: a line to which someone or something is attached (as for security)
+
+
 
 ## Table of Contents
 
