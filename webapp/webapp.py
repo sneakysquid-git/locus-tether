@@ -214,14 +214,6 @@ def api_today():
             else:
                 action_items.append(item)
 
-    # Key facts stay scoped to TODAY specifically — these are tied to a
-    # given conversation's context, not an open/closed work item.
-    key_facts = []
-    for a in analyses:
-        source_title = a.get("title", a.get("_stem", ""))
-        for fact in a.get("key_facts", []):
-            key_facts.append({"fact": fact, "source_title": source_title})
-
     # Lists teaser: which named lists got new items added today specifically.
     lists_today_map = {}
     for a in analyses:
@@ -246,6 +238,60 @@ def api_today():
             }
         )
 
+    # --- Stats bar (#51 follow-up): a genuine at-a-glance summary, not
+    # just another section — computed once here rather than making the
+    # frontend re-derive it from the same data it's already displaying.
+    people_today = set()
+    for a in analyses:
+        for p in a.get("participants", []):
+            if p.get("name"):
+                people_today.add(p["name"])
+
+    feedback_trend = None
+    if speech_coaching:
+        today_wpms = [
+            sc["metrics"]["pace"]["words_per_minute"]
+            for sc in speech_coaching
+            if sc.get("metrics", {}).get("pace", {}).get("words_per_minute")
+        ]
+        if today_wpms:
+            today_avg_wpm = sum(today_wpms) / len(today_wpms)
+            all_coaching = data_store.load_all_speech_coaching()
+            baseline_wpms = [
+                sc["metrics"]["pace"]["words_per_minute"]
+                for sc in all_coaching
+                if sc.get("_date") != today.isoformat()
+                and sc.get("metrics", {}).get("pace", {}).get("words_per_minute")
+            ]
+            if baseline_wpms:
+                baseline_avg = sum(baseline_wpms) / len(baseline_wpms)
+                delta = today_avg_wpm - baseline_avg
+                # A few WPM of natural noise shouldn't read as a "trend" —
+                # only call out a real direction past a small threshold.
+                direction = "up" if delta > 3 else "down" if delta < -3 else "steady"
+                feedback_trend = {
+                    "today_avg_wpm": round(today_avg_wpm, 1),
+                    "baseline_avg_wpm": round(baseline_avg, 1),
+                    "direction": direction,
+                }
+            else:
+                # First time there's ever been coaching data — no baseline
+                # to compare against yet, but today's number is still
+                # worth showing.
+                feedback_trend = {"today_avg_wpm": round(today_avg_wpm, 1), "baseline_avg_wpm": None, "direction": None}
+
+    # Each conversation carries its own first key fact directly now,
+    # rather than key facts living in a separate global section — folds
+    # what used to be its own full section into a one-line preview under
+    # the conversation it actually came from.
+    facts_by_stem = {}
+    for a in analyses:
+        facts = a.get("key_facts", [])
+        if facts:
+            facts_by_stem[a.get("_stem", "")] = facts[0]
+    for c in conversations:
+        c["key_fact_preview"] = facts_by_stem.get(c["stem"])
+
     return jsonify(
         {
             "date": today.isoformat(),
@@ -253,9 +299,14 @@ def api_today():
             "conversations": conversations,
             "due_soon": due_soon,
             "action_items": action_items,
-            "key_facts": key_facts,
             "lists_today": lists_today,
             "speech_coaching": speech_teasers,
+            "stats": {
+                "conversation_count": len(analyses),
+                "people_count": len(people_today),
+                "action_item_count": len(due_soon) + len(action_items),
+                "feedback_trend": feedback_trend,
+            },
         }
     )
 
@@ -706,6 +757,10 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
               margin-bottom: var(--space-2); background: var(--color-bg-card);
               -webkit-user-select: none; user-select: none; cursor: pointer; }
   .list-row:active { background: var(--color-bg-hover); }
+  .stat-box { flex: 1; min-width: 80px; background: var(--color-bg-card); border: 1px solid var(--color-border);
+              border-radius: 8px; padding: var(--space-2) var(--space-1); text-align: center; }
+  .stat-num { font-size: var(--text-lg); font-weight: 700; color: var(--color-text-primary); }
+  .stat-label { font-size: var(--text-xs); color: var(--color-text-muted); }
   .badge { display: inline-block; color: var(--color-button-text); font-size: var(--text-xs); padding: var(--space-0) var(--space-2);
            border-radius: 10px; margin: var(--space-2) 0; }
   .todo-row { display: flex; align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-bg-raised);
@@ -879,49 +934,44 @@ async function renderToday() {
   document.getElementById('content').innerHTML = 'Loading...';
   const data = await (await fetch('/api/today')).json();
 
-  let html = `<p style="color:var(--color-text-muted);font-size:var(--text-base);">
-    ${data.conversation_count} conversation(s) today</p>`;
-
   if (!data.conversation_count && !data.action_items.length && !data.due_soon.length) {
-    html += '<p class="empty">Nothing recorded yet today. Pull up the Conversations or To-Dos tabs for older history.</p>';
-    document.getElementById('content').innerHTML = html;
+    document.getElementById('content').innerHTML =
+      '<p class="empty">Nothing recorded yet today. Pull up the Conversations or To-Dos tabs for older history.</p>';
     return;
   }
 
-  // --- Due soon: pulled out from the general list since "due tomorrow"
-  // deserves more attention than "no deadline at all". ---
-  if (data.due_soon.length) {
-    html += '<h2 style="font-size:var(--text-md);">Due soon</h2>';
-    data.due_soon.forEach(item => {
-      html += `<div class="todo-row" style="border-left:3px solid var(--color-warning);padding-left:var(--space-2);"
-        data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
-        <input type="checkbox" ${item.completed ? 'checked' : ''}
-          onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
-        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}
-        <span class="due">(due: ${esc(item.due_date)})</span>${ownerLabel(item)}
-        <span class="source-label"> — ${esc(item.source_title)}</span></span>
-      </div>`;
-    });
+  // --- Stats bar: genuine at-a-glance summary, computed server-side so
+  // this isn't just re-deriving numbers the sections below already show —
+  // it's meant to replace needing to actually read them for a quick check. ---
+  const s = data.stats;
+  let trendHtml = '';
+  if (s.feedback_trend) {
+    const t = s.feedback_trend;
+    if (t.direction) {
+      const arrow = t.direction === 'up' ? '↑' : t.direction === 'down' ? '↓' : '→';
+      trendHtml = `<div class="stat-box"><div class="stat-num">${arrow} ${t.today_avg_wpm}</div><div class="stat-label">WPM vs your ${t.baseline_avg_wpm} avg</div></div>`;
+    } else {
+      trendHtml = `<div class="stat-box"><div class="stat-num">${t.today_avg_wpm}</div><div class="stat-label">WPM today</div></div>`;
+    }
   }
+  let html = `<div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4);flex-wrap:wrap;">
+    <div class="stat-box"><div class="stat-num">${s.conversation_count}</div><div class="stat-label">conversation${s.conversation_count === 1 ? '' : 's'}</div></div>
+    <div class="stat-box"><div class="stat-num">${s.people_count}</div><div class="stat-label">people</div></div>
+    <div class="stat-box"><div class="stat-num">${s.action_item_count}</div><div class="stat-label">to-do${s.action_item_count === 1 ? '' : 's'}</div></div>
+    ${trendHtml}
+  </div>`;
 
-  // --- Today's conversations: compact, tappable rows into full detail ---
-  if (data.conversations.length) {
-    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Conversations today</h2>';
-    data.conversations.forEach(c => {
-      const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
-      html += `<div class="list-row" style="padding:var(--space-2) var(--space-3);" onclick="goDetail('conversations', '${esc(c.stem)}')">
-        <span style="font-weight:600;">${categoryIcon(c.category)} ${esc(c.title)}</span>
-        <span class="badge" style="background:${color};margin-left:var(--space-2);">${esc(c.category)}</span>
-      </div>`;
-    });
-  }
-
-  // --- Remaining action items (due-soon ones already shown above) ---
-  if (data.action_items.length) {
-    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Action items</h2>';
-    data.action_items.forEach(item => {
+  // --- To-Dos today: due-soon + regular action items merged into ONE
+  // section (previously two separately-headed blocks) — due-soon items
+  // keep the orange left-border for visual urgency, just without a whole
+  // extra section header of their own. ---
+  const allTodos = [...data.due_soon.map(i => ({...i, isDueSoon: true})), ...data.action_items];
+  if (allTodos.length) {
+    html += '<h2 style="font-size:var(--text-md);">To-Dos today</h2>';
+    allTodos.forEach(item => {
+      const borderStyle = item.isDueSoon ? 'border-left:3px solid var(--color-warning);padding-left:var(--space-2);' : '';
       const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
-      html += `<div class="todo-row" data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
+      html += `<div class="todo-row" style="${borderStyle}" data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
           onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
         <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}
@@ -930,29 +980,33 @@ async function renderToday() {
     });
   }
 
-  // --- Key facts rollup across today's conversations ---
-  if (data.key_facts.length) {
-    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Key facts</h2><ul style="font-size:var(--text-base);padding-left:var(--space-5);">';
-    data.key_facts.forEach(kf => {
-      html += `<li>${esc(kf.fact)} <span class="source-label">— ${esc(kf.source_title)}</span></li>`;
-    });
-    html += '</ul>';
-  }
-
-  // --- Speaking style teasers: one line + tap-through to full detail ---
-  if (data.speech_coaching.length) {
-    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Speaking Style Feedback</h2>';
-    data.speech_coaching.forEach(sc => {
-      html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
-        <div style="font-weight:600;">${esc(sc.title)}</div>
-        <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin:var(--space-1) 0 0;">${esc(sc.overall_take_preview)}</p>
+  // --- Today's conversations: each row now carries its own key fact
+  // preview inline (previously a separate global "Key facts" section). ---
+  if (data.conversations.length) {
+    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Conversations today</h2>';
+    data.conversations.forEach(c => {
+      const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
+      const factHtml = c.key_fact_preview
+        ? `<div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-top:var(--space-1);">${esc(c.key_fact_preview)}</div>` : '';
+      html += `<div class="list-row" style="padding:var(--space-2) var(--space-3);" onclick="goDetail('conversations', '${esc(c.stem)}')">
+        <span style="font-weight:600;">${categoryIcon(c.category)} ${esc(c.title)}</span>
+        <span class="badge" style="background:${color};margin-left:var(--space-2);">${esc(c.category)}</span>
+        ${factHtml}
       </div>`;
     });
   }
 
-  // --- Lists teaser: named lists that got new items added today ---
-  if (data.lists_today.length) {
-    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Added to lists today</h2>';
+  // --- Also today: speaking-style feedback + list additions combined
+  // into one smaller section (previously two separate always-rendered
+  // headers, even when there was often nothing in one or both). ---
+  if (data.speech_coaching.length || data.lists_today.length) {
+    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Also today</h2>';
+    data.speech_coaching.forEach(sc => {
+      html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
+        <div style="font-weight:600;">🎤 ${esc(sc.title)}</div>
+        <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin:var(--space-1) 0 0;">${esc(sc.overall_take_preview)}</p>
+      </div>`;
+    });
     data.lists_today.forEach(l => {
       html += `<div class="list-row" onclick="goDetail('lists', '${esc(l.list_name)}')">
         <div style="display:flex;justify-content:space-between;">
@@ -1241,25 +1295,43 @@ async function deleteConversation(stem) {
   goTab('conversations');
 }
 
+let _todosShowTodayOnly = false;
+
 async function renderTodos() {
   setHeader('To-Dos', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
   const items = await (await fetch('/api/todos')).json();
+  // Authoritative "today" comes from the server (already computed correctly
+  // for #10/#14's date-scoping elsewhere) rather than being recomputed in
+  // JS — a client-side new Date() could disagree with the server's local
+  // time near a midnight boundary, silently filtering the wrong items.
+  const todayData = await (await fetch('/api/today')).json();
+  const todayStr = todayData.date;
 
-  let html = `<div style="margin-bottom:var(--space-3);">
+  let html = `<div style="margin-bottom:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
+    <button onclick="toggleTodosFilter()"
+      style="background:${_todosShowTodayOnly ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)'};
+      color:${_todosShowTodayOnly ? 'var(--color-button-text)' : 'var(--color-text-muted)'};
+      border:1px solid var(--color-border);border-radius:6px;padding:var(--space-2) var(--space-3);font-size:var(--text-sm);">
+      ${_todosShowTodayOnly ? 'Showing: Today only' : 'Showing: All open'}
+    </button>
     <button onclick="goDetail('todos', 'completed')"
       style="background:var(--color-bg-raised);color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:6px;padding:var(--space-2) var(--space-3);font-size:var(--text-sm);">
       View Completed Today
     </button>
   </div>`;
 
-  if (!items.length) {
-    html += '<p class="empty">No open action items.</p>';
+  const filtered = _todosShowTodayOnly ? items.filter(i => i.date === todayStr) : items;
+
+  if (!filtered.length) {
+    html += _todosShowTodayOnly
+      ? '<p class="empty">No open action items from today specifically — try "Showing: All open" for older history.</p>'
+      : '<p class="empty">No open action items.</p>';
     document.getElementById('content').innerHTML = html;
     return;
   }
 
-  items.forEach(item => {
+  filtered.forEach(item => {
     const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
     html += `<div class="todo-row" data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
       <input type="checkbox" ${item.completed ? 'checked' : ''}
@@ -1269,6 +1341,11 @@ async function renderTodos() {
     </div>`;
   });
   document.getElementById('content').innerHTML = html;
+}
+
+function toggleTodosFilter() {
+  _todosShowTodayOnly = !_todosShowTodayOnly;
+  renderTodos();
 }
 
 async function renderCompletedTodos() {
