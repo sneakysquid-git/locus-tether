@@ -22,7 +22,6 @@
 stages:
   - lint
   - test
-  - build
   - security
 
 variables:
@@ -75,24 +74,18 @@ pytest:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
-# ─── Build sanity check ───────────────────────────────────────────────────────
-# Confirms the Dockerfile still builds successfully — nothing more. Not
-# pushed anywhere: this project isn't distributed as a prebuilt image,
-# so there's no registry for a real image to live in, and no container
-# to scan (see the note at the top of this file for why container
-# scanning was dropped along with this).
-build:
-  stage: build
-  image: docker:27
-  services:
-    - docker:27-dind
-  variables:
-    DOCKER_TLS_CERTDIR: "/certs"
-  script:
-    - docker build -f docker/Dockerfile .
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+# ─── Build sanity check: deliberately NOT included ───────────────────────────
+# The Dockerfile installs CUDA/cuDNN from NVIDIA's Jetson-specific (L4T)
+# apt repository — packages that only exist for the Jetson's ARM64
+# architecture. Standard GitLab CI runners (shared runners, and most
+# self-hosted ones by default) run on x86_64, where those exact package
+# names simply aren't in that repo's index. This isn't a version mismatch
+# or something to patch — this Dockerfile can only successfully build on
+# actual Jetson/ARM64 hardware, never in typical CI infrastructure. A
+# build job here would be permanently red, not a real check of anything.
+# If an actual ARM64/Jetson-based runner is ever registered for this
+# project, this would be worth revisiting with a job scoped to that
+# runner specifically via `tags:`.
 
 # ─── Security scanning ────────────────────────────────────────────────────────
 include:
