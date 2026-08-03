@@ -1,5 +1,13 @@
 # LocusTether: A Fully Local AI Memory Pipeline for the Omi Wearable
 
+Locus: 
+a: the place where something is situated or occurs : site, location
+b: a center of activity, attention, or concentration
+
+Tether: 
+a: a line (as of rope or chain) by which an animal is fastened so as to restrict its range of movement
+b: a line to which someone or something is attached (as for security)
+
 ## Table of Contents
 
 - [What is an Omi?](#what-is-an-omi)
@@ -22,15 +30,6 @@
 > doesn't jump correctly once mirrored to GitHub (see the GitHub migration
 > plan), the anchor slugs may need a small adjustment for that platform's
 > slightly different rules around punctuation.
-
-## What is an Omi?
-
-An Omi wearable is a small, orb-shaped AI device created by the tech startup Based Hardware. It functions as a hands-free, wearable AI companion and "second brain" designed to record, transcribe, and summarize your conversations and daily activities.
-
-- How it is worn: The tiny device can be worn discreetly around the neck as a necklace or clipped to your clothing.
-- Key features: The wearable continuously listens to your voice and surroundings. The companion app (which runs on your phone or desktop) transcribes your conversations in real-time, generates summaries, highlights action items, and acts as a chat interface that remembers what you've heard or discussed.
-- AI integrations: It connects to other services to automate tasks, such as sending emails, drafting notes, translating languages, or saving information directly to Google Drive.
-- Privacy and Open Source: One of Omi's main selling points is its focus on data ownership. The device and software are completely open-source, allowing you to choose whether your data stays locally on your phone, is stored on your own self-hosted server, or goes to their secure cloud.
 
 ## What this project is
 
@@ -55,6 +54,15 @@ have different numbers/URLs than the ones linked below; these point at the
 upstream project's known issues specifically.
 **Known issues** are tracked as real GitLab issues (see the Known Issues
 section below) rather than just code comments, going forward.
+
+## What is an Omi?
+
+An Omi wearable is a small, orb-shaped AI device created by the tech startup Based Hardware. It functions as a hands-free, wearable AI companion and "second brain" designed to record, transcribe, and summarize your conversations and daily activities.
+
+- How it is worn: The tiny device can be worn discreetly around the neck as a necklace or clipped to your clothing.
+- Key features: The wearable continuously listens to your voice and surroundings. The companion app (which runs on your phone or desktop) transcribes your conversations in real-time, generates summaries, highlights action items, and acts as a chat interface that remembers what you've heard or discussed.
+- AI integrations: It connects to other services to automate tasks, such as sending emails, drafting notes, translating languages, or saving information directly to Google Drive.
+- Privacy and Open Source: One of Omi's main selling points is its focus on data ownership. The device and software are completely open-source, allowing you to choose whether your data stays locally on your phone, is stored on your own self-hosted server, or goes to their secure cloud.
 
 ## Prior art — is this actually new, and why choose it over the official app?
 
