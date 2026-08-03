@@ -96,23 +96,52 @@ def compute_pace(transcript: dict) -> dict:
     }
 
 
-def compute_pauses(transcript: dict, notable_threshold_seconds: float = 1.5) -> dict:
+def compute_pauses(
+    transcript: dict, notable_threshold_seconds: float = 1.5, all_segments: Optional[list] = None
+) -> dict:
     """
     Gaps between consecutive Whisper segments, treated as pauses. Only
     counts gaps between segments that Whisper actually produced — VAD
     already stripped leading/trailing silence and long dead air before
     transcription even started, so this measures pauses WITHIN the speech
     that was transcribed, not silence in the original recording overall.
+
+    `all_segments`: the ORIGINAL, unfiltered segment list, relevant when
+    `transcript` has already been narrowed to just the main user's own
+    segments via filter_to_main_user (#37). Without this, a gap between
+    two of the main user's own remaining segments could actually span a
+    long stretch where someone ELSE was talking — normal conversational
+    turn-taking, not the main user pausing — and would get misattributed
+    as their own awkward silence. Confirmed on a real recording (#48): a
+    229-second "pause" that was actually another speaker's long turn.
+
+    When `all_segments` is given, a gap only counts as a genuine pause if
+    NO OTHER speaker has a segment overlapping that gap window — otherwise
+    it's skipped entirely (the main user was listening, not silent).
     """
     segments = transcript.get("segments", [])
     if len(segments) < 2:
         return {"pause_count": 0, "total_pause_seconds": 0.0, "longest_pause_seconds": 0.0, "notable_pauses": []}
 
+    main_user_speaker = segments[0].get("speaker") if all_segments else None
+
     pauses = []
     for prev_seg, next_seg in zip(segments, segments[1:]):
         gap = next_seg["start"] - prev_seg["end"]
-        if gap > 0:
-            pauses.append(gap)
+        if gap <= 0:
+            continue
+
+        if all_segments is not None:
+            someone_else_spoke_during_gap = any(
+                s.get("speaker") != main_user_speaker
+                and s["start"] < next_seg["start"]
+                and s["end"] > prev_seg["end"]
+                for s in all_segments
+            )
+            if someone_else_spoke_during_gap:
+                continue  # normal turn-taking, not a pause in the main user's own speech
+
+        pauses.append(gap)
 
     notable = [round(p, 1) for p in pauses if p >= notable_threshold_seconds]
 
@@ -149,10 +178,14 @@ def compute_filler_words(transcript: dict) -> dict:
     }
 
 
-def analyze_speech_metrics(transcript: dict) -> dict:
-    """Combines all three deterministic metrics into one dict."""
+def analyze_speech_metrics(transcript: dict, all_segments: Optional[list] = None) -> dict:
+    """
+    Combines all three deterministic metrics into one dict. `all_segments`:
+    see compute_pauses — the original unfiltered segments, when `transcript`
+    has already been narrowed to just the main user's own speech.
+    """
     return {
         "pace": compute_pace(transcript),
-        "pauses": compute_pauses(transcript),
+        "pauses": compute_pauses(transcript, all_segments=all_segments),
         "fillers": compute_filler_words(transcript),
     }

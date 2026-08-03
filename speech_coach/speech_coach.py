@@ -84,7 +84,11 @@ def generate_coaching_report(transcript_path: Path) -> dict:
     """
     transcript = speech_metrics.load_transcript(transcript_path)
     filtered_transcript = speech_metrics.filter_to_main_user(transcript)
-    metrics = speech_metrics.analyze_speech_metrics(filtered_transcript)
+    # Only pass the original segments along when filtering actually applied
+    # (#48) — meaningless/harmless otherwise, since there'd be nothing to
+    # distinguish "the main user paused" from "someone else was talking."
+    all_segments = transcript.get("segments") if filtered_transcript is not transcript else None
+    metrics = speech_metrics.analyze_speech_metrics(filtered_transcript, all_segments=all_segments)
     feedback = get_coaching_feedback(filtered_transcript, metrics)
     return {"metrics": metrics, "feedback": feedback}
 
