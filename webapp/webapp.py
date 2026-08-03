@@ -529,10 +529,22 @@ def api_get_ui_settings():
 @app.route("/api/settings/ui", methods=["POST"])
 def api_save_ui_settings():
     body = request.get_json(force=True) or {}
-    theme = body.get("theme")
-    if theme not in ("dark", "light"):
-        return jsonify({"error": "theme must be 'dark' or 'light'"}), 400
-    updated = ui_preferences.set_preferences(theme=theme)
+    updates = {}
+
+    if "theme" in body:
+        if body["theme"] not in ("dark", "light"):
+            return jsonify({"error": "theme must be 'dark' or 'light'"}), 400
+        updates["theme"] = body["theme"]
+
+    if "text_size" in body:
+        if body["text_size"] not in ("small", "medium", "large"):
+            return jsonify({"error": "text_size must be 'small', 'medium', or 'large'"}), 400
+        updates["text_size"] = body["text_size"]
+
+    if not updates:
+        return jsonify({"error": "No valid preference provided"}), 400
+
+    updated = ui_preferences.set_preferences(**updates)
     return jsonify(updated)
 
 
@@ -584,7 +596,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="theme-color" content="var(--color-bg-page)">
+<meta name="theme-color" content="#0d1117">
 <title>LocusTether</title>
 <style>
   :root {
@@ -601,14 +613,21 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
     --space-6: 24px;
     --space-7: 32px;
 
-    /* Type scale (#19) — 5 deliberate steps instead of the 7 ad hoc sizes
-       that had accumulated (11/12/13/14/15/16/20px), so there's an actual
-       visual hierarchy pulling the eye to what matters on a given screen. */
-    --text-xs: 11px;   /* category badges, micro labels */
-    --text-sm: 13px;   /* metadata, source labels, dates, secondary text */
-    --text-base: 14px; /* body text, descriptions, list item text */
-    --text-md: 16px;   /* card titles, section headers (h2) */
-    --text-lg: 20px;   /* page title (h1) */
+    /* Type scale (#19, scaled via #49's --text-scale) — 5 deliberate steps
+       instead of the 7 ad hoc sizes that had accumulated
+       (11/12/13/14/15/16/20px), so there's an actual visual hierarchy
+       pulling the eye to what matters on a given screen. Each size is
+       computed from --text-scale (default 1, i.e. these exact pixel
+       values — "Medium" in Settings changes nothing) rather than being a
+       fixed pixel value, so a text-size preference can scale everything
+       proportionally by changing just that one multiplier instead of
+       redefining this whole scale two more times for Small/Large. */
+    --text-scale: 1;
+    --text-xs: calc(11px * var(--text-scale));   /* category badges, micro labels */
+    --text-sm: calc(13px * var(--text-scale));   /* metadata, source labels, dates, secondary text */
+    --text-base: calc(14px * var(--text-scale)); /* body text, descriptions, list item text */
+    --text-md: calc(16px * var(--text-scale));   /* card titles, section headers (h2) */
+    --text-lg: calc(20px * var(--text-scale));   /* page title (h1) */
 
     /* Fixed bottom tab bar height clearance for scrolling content —
        a functional value, not a decorative spacing choice, so it's kept
@@ -667,6 +686,9 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
     --color-success: #1a7f37;
     --color-button-text: #ffffff;
   }
+
+  :root[data-text-size="small"] { --text-scale: 0.875; }
+  :root[data-text-size="large"] { --text-scale: 1.15; }
   * { box-sizing: border-box; }
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 600px;
          margin: 0 auto; padding: var(--space-4) var(--space-4) var(--tabbar-clearance); color: var(--color-text-primary); background: var(--color-bg-page); }
@@ -1466,7 +1488,8 @@ async function renderSettings() {
     <div id="digest-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--color-text-muted);"></div>
 
     <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Appearance</h2>
-    <div style="display:flex;gap:var(--space-2);">
+    <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Theme</p>
+    <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4);">
       <button id="theme-btn-dark" onclick="setTheme('dark')"
         style="flex:1;padding:12px;border-radius:6px;font-size:var(--text-base);
         border:1px solid var(--color-border);
@@ -1477,6 +1500,25 @@ async function renderSettings() {
         border:1px solid var(--color-border);
         background:${uiSettings.theme === 'light' ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)'};
         color:${uiSettings.theme === 'light' ? 'var(--color-button-text)' : 'var(--color-text-primary)'};">Light</button>
+    </div>
+
+    <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Text size</p>
+    <div style="display:flex;gap:var(--space-2);">
+      <button id="textsize-btn-small" onclick="setTextSize('small')"
+        style="flex:1;padding:12px;border-radius:6px;font-size:var(--text-base);
+        border:1px solid var(--color-border);
+        background:${uiSettings.text_size === 'small' ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)'};
+        color:${uiSettings.text_size === 'small' ? 'var(--color-button-text)' : 'var(--color-text-primary)'};">Small</button>
+      <button id="textsize-btn-medium" onclick="setTextSize('medium')"
+        style="flex:1;padding:12px;border-radius:6px;font-size:var(--text-base);
+        border:1px solid var(--color-border);
+        background:${uiSettings.text_size === 'medium' ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)'};
+        color:${uiSettings.text_size === 'medium' ? 'var(--color-button-text)' : 'var(--color-text-primary)'};">Medium</button>
+      <button id="textsize-btn-large" onclick="setTextSize('large')"
+        style="flex:1;padding:12px;border-radius:6px;font-size:var(--text-base);
+        border:1px solid var(--color-border);
+        background:${uiSettings.text_size === 'large' ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)'};
+        color:${uiSettings.text_size === 'large' ? 'var(--color-button-text)' : 'var(--color-text-primary)'};">Large</button>
     </div>
   `;
   document.getElementById('content').innerHTML = html;
@@ -1500,6 +1542,34 @@ async function setTheme(theme) {
     });
   } catch (err) {
     showErrorPanel('Could not save theme preference — could not reach the server', err.message);
+  }
+}
+
+async function setTextSize(size) {
+  // "medium" has no CSS override at all (it's just the base --text-scale:1
+  // in :root) — the attribute needs to be removed entirely for it, not
+  // set to a value with nothing to match, matching how the CSS itself
+  // only defines :root[data-text-size="small"/"large"] overrides.
+  if (size === 'medium') {
+    document.documentElement.removeAttribute('data-text-size');
+  } else {
+    document.documentElement.setAttribute('data-text-size', size);
+  }
+
+  ['small', 'medium', 'large'].forEach(s => {
+    const btn = document.getElementById('textsize-btn-' + s);
+    btn.style.background = s === size ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)';
+    btn.style.color = s === size ? 'var(--color-button-text)' : 'var(--color-text-primary)';
+  });
+
+  try {
+    await fetch('/api/settings/ui', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text_size: size })
+    });
+  } catch (err) {
+    showErrorPanel('Could not save text size preference — could not reach the server', err.message);
   }
 }
 
@@ -1657,10 +1727,26 @@ render(currentState());
 
 @app.route("/")
 def index():
-    theme = ui_preferences.get_preferences().get("theme", "dark")
+    prefs = ui_preferences.get_preferences()
+    theme = prefs.get("theme", "dark")
+    text_size = prefs.get("text_size", "medium")
+
+    attrs = ""
     if theme == "light":
-        return _PAGE_TEMPLATE.replace("<html>", '<html data-theme="light">', 1)
-    return _PAGE_TEMPLATE
+        attrs += ' data-theme="light"'
+    if text_size in ("small", "large"):
+        attrs += f' data-text-size="{text_size}"'
+
+    page = _PAGE_TEMPLATE
+    if attrs:
+        page = page.replace("<html>", f"<html{attrs}>", 1)
+    if theme == "light":
+        # theme-color is a plain HTML attribute, not CSS — it can't resolve
+        # a var() reference (unlike everything else in this file, this one
+        # needed a real literal color injected directly, matching whatever
+        # light theme's actual --color-bg-page value is).
+        page = page.replace('content="#0d1117"', 'content="#ffffff"', 1)
+    return page
 
 
 if __name__ == "__main__":

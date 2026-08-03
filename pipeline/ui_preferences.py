@@ -12,7 +12,7 @@ from typing import Any, Dict
 
 import config
 
-DEFAULTS: Dict[str, Any] = {"theme": "dark"}
+DEFAULTS: Dict[str, Any] = {"theme": "dark", "text_size": "medium"}
 
 
 def _preferences_path() -> Path:
