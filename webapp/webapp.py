@@ -40,6 +40,7 @@ import conversation_state
 import speaker_profiles
 import digest_preferences
 import ui_preferences
+import manual_todos
 
 log = logging.getLogger("omi.webapp")
 
@@ -157,6 +158,27 @@ def _all_open_action_items() -> list[dict]:
             item["source_title"] = source_title
             item["date"] = source_date
             items.append(item)
+
+    # Manually-added items (#41 follow-up) merge in alongside
+    # conversation-derived ones — same shape, same completion-tracking
+    # mechanism (todo_state.py, keyed by the item's own "manual:..." id),
+    # just with no real source conversation to attribute or navigate to.
+    for m in manual_todos.list_items():
+        if todo_state.is_completed(m["id"], False):
+            continue
+        items.append(
+            {
+                "id": m["id"],
+                "description": m["description"],
+                "due_date": m.get("due_date"),
+                "owner": m.get("owner"),
+                "completed": False,
+                "source_stem": None,
+                "source_title": "Added manually",
+                "date": m.get("created_date", ""),
+                "is_manual": True,
+            }
+        )
     return items
 
 
@@ -465,6 +487,31 @@ def api_toggle_todo(item_id: str):
     default = request.json.get("current_default", False) if request.is_json else False
     new_state = todo_state.toggle(item_id, default)
     return jsonify({"id": item_id, "completed": new_state})
+
+
+@app.route("/api/todos/manual", methods=["POST"])
+def api_add_manual_todo():
+    body = request.get_json(force=True) or {}
+    description = (body.get("description") or "").strip()
+    if not description:
+        return jsonify({"error": "A description is required"}), 400
+    due_date = (body.get("due_date") or "").strip() or None
+    owner = (body.get("owner") or "").strip() or None
+    item = manual_todos.add_item(description, due_date=due_date, owner=owner)
+    return jsonify(item)
+
+
+@app.route("/api/todos/manual/<path:item_id>", methods=["DELETE"])
+def api_delete_manual_todo(item_id: str):
+    # manual_todos.delete_item expects a bare uuid-ish suffix; the item's
+    # real id (as used everywhere else, e.g. toggling) is "manual:<that>" —
+    # reconstruct it here so the frontend can just pass the id it already
+    # has without needing to know about this storage detail.
+    full_id = item_id if item_id.startswith("manual:") else f"manual:{item_id}"
+    deleted = manual_todos.delete_item(full_id)
+    if not deleted:
+        abort(404)
+    return jsonify({"deleted": full_id})
 
 
 # --- API: Lists ----------------------------------------------------------
@@ -930,17 +977,14 @@ async function renderToday() {
   document.getElementById('content').innerHTML = 'Loading...';
   const data = await (await fetch('/api/today')).json();
 
-  if (!data.conversation_count && !data.action_items.length && !data.due_soon.length) {
-    document.getElementById('content').innerHTML =
-      '<p class="empty">Nothing recorded yet today. Pull up the Conversations or To-Dos tabs for older history.</p>';
-    return;
-  }
-
   // --- Greeting + waveform signature (#51 follow-up: "homepage
   // prettification") — the one deliberate visual flourish on this page,
   // built from the app's actual subject matter (voice/audio) rather than
   // generic decoration. Everything else on this page stays as quiet and
-  // disciplined as the rest of the app. ---
+  // disciplined as the rest of the app. Deliberately renders even on a
+  // genuinely empty day — a 0-conversation day is still a real day, and
+  // hiding the whole page behind an early return meant the design never
+  // showed at all until something had been logged. ---
   const hour = new Date().getHours();
   const greeting = hour < 5 ? 'Good night' : hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : hour < 21 ? 'Good evening' : 'Good night';
   const waveformBars = [6, 14, 9, 18, 11, 16, 7, 13, 10].map(h =>
@@ -1033,6 +1077,14 @@ async function renderToday() {
         </div>
       </div>`;
     });
+  }
+
+  // Genuinely nothing logged today — the stats bar above already shows
+  // that honestly (all zeros), so this is just a pointer to older
+  // history, not a replacement for the whole page anymore.
+  if (!data.conversation_count && !data.action_items.length && !data.due_soon.length
+      && !data.speech_coaching.length && !data.lists_today.length) {
+    html += '<p class="empty">Nothing recorded yet today. Pull up the Conversations or To-Dos tabs for older history.</p>';
   }
 
   document.getElementById('content').innerHTML = html;
@@ -1337,6 +1389,14 @@ async function renderTodos() {
       style="background:var(--color-bg-raised);color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:6px;padding:var(--space-2) var(--space-3);font-size:var(--text-sm);">
       View Completed Today
     </button>
+  </div>
+
+  <div style="display:flex;gap:var(--space-2);margin-bottom:var(--space-4);">
+    <input type="text" id="new-todo-input" placeholder="Add a to-do..."
+      onkeydown="if(event.key==='Enter') addManualTodo();"
+      style="flex:1;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:8px;font-size:var(--text-base);box-sizing:border-box;">
+    <button onclick="addManualTodo()"
+      style="background:var(--color-accent-strong);color:var(--color-button-text);border:none;border-radius:6px;padding:8px 16px;font-size:var(--text-base);">Add</button>
   </div>`;
 
   const filtered = _todosShowTodayOnly ? items.filter(i => i.date === todayStr) : items;
@@ -1351,14 +1411,54 @@ async function renderTodos() {
 
   filtered.forEach(item => {
     const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
-    html += `<div class="todo-row" data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
+    // Manual items have no source conversation to navigate to — tapping
+    // the row does nothing for them (only the checkbox is interactive),
+    // and they get a delete button instead, since there's no "view
+    // source" option to offer as an alternative way to manage them.
+    const rowClick = item.is_manual ? '' : `onclick="goDetail('conversations','${esc(item.source_stem)}')"`;
+    const sourceOrDelete = item.is_manual
+      ? `<button onclick="event.stopPropagation(); deleteManualTodo('${esc(item.id)}')"
+          style="background:none;border:none;color:var(--color-danger);font-size:var(--text-sm);padding:0;margin-left:var(--space-2);">Delete</button>`
+      : `<span class="source-label"> — ${esc(item.source_title)} (${esc(item.date)})</span>`;
+    html += `<div class="todo-row" data-todo-id="${esc(item.id)}" ${rowClick}>
       <input type="checkbox" ${item.completed ? 'checked' : ''}
         onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
       <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}
-      <span class="source-label"> — ${esc(item.source_title)} (${esc(item.date)})</span></span>
+      ${sourceOrDelete}</span>
     </div>`;
   });
   document.getElementById('content').innerHTML = html;
+}
+
+async function addManualTodo() {
+  const input = document.getElementById('new-todo-input');
+  const description = input.value.trim();
+  if (!description) return;
+
+  try {
+    const res = await fetch('/api/todos/manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showErrorPanel('Could not add to-do', body.error || `Server returned ${res.status}`);
+      return;
+    }
+    renderTodos();
+  } catch (err) {
+    showErrorPanel('Could not add to-do — could not reach the server', err.message);
+  }
+}
+
+async function deleteManualTodo(itemId) {
+  try {
+    await fetch(`/api/todos/manual/${encodeURIComponent(itemId)}`, { method: 'DELETE' });
+    renderTodos();
+  } catch (err) {
+    showErrorPanel('Could not delete to-do — could not reach the server', err.message);
+  }
 }
 
 function toggleTodosFilter() {
