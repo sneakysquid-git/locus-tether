@@ -1094,6 +1094,10 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .list-row:active { background: var(--color-bg-hover); }
   .badge { display: inline-block; color: var(--color-button-text); font-size: var(--text-xs); padding: var(--space-0) var(--space-2);
            border-radius: 10px; margin: var(--space-2) 0; }
+  .inline-spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--color-border);
+           border-top-color: var(--color-accent); border-radius: 50%; animation: spin 0.8s linear infinite;
+           vertical-align: -2px; margin-right: var(--space-1); }
+  @keyframes spin { to { transform: rotate(360deg); } }
   .todo-row { display: flex; align-items: baseline; padding: var(--space-2) 0; border-bottom: 1px solid var(--color-bg-raised);
               -webkit-user-select: none; user-select: none; }
   .todo-row input[type="checkbox"] {
@@ -1450,7 +1454,7 @@ async function renderConversationDetail(stem) {
   }
 
   if (unnamedSpeakers.speakers && unnamedSpeakers.speakers.length) {
-    html += `<div style="background:var(--color-bg-raised);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-3);margin-top:var(--space-3);">
+    html += `<div id="speaker-label-box" style="background:var(--color-bg-raised);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-3);margin-top:var(--space-3);">
       <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Who said this? Naming a speaker updates this conversation's summary to use their real name instead of "the other speaker."</div>`;
     unnamedSpeakers.speakers.forEach((s, i) => {
       html += `<div style="margin-bottom:var(--space-3);">
@@ -1461,9 +1465,9 @@ async function renderConversationDetail(stem) {
           <label style="display:flex;align-items:center;gap:4px;font-size:var(--text-sm);color:var(--color-text-muted);">
             <input type="checkbox" id="speaker-enroll-${i}" checked style="width:auto;">Remember this voice
           </label>
-          <button onclick="submitSpeakerRename('${stem}', '${s.speaker_id}', ${i})"
+          <button id="speaker-save-btn-${i}" onclick="submitSpeakerRename('${stem}', '${s.speaker_id}', ${i})"
             style="background:var(--color-accent-strong);color:var(--color-button-text);border:none;border-radius:6px;padding:6px 14px;font-size:var(--text-sm);">Save</button>
-          <button onclick="skipSpeaker('${stem}', '${s.speaker_id}')"
+          <button id="speaker-skip-btn-${i}" onclick="skipSpeaker('${stem}', '${s.speaker_id}')"
             style="background:var(--color-bg-page);color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:6px;padding:6px 14px;font-size:var(--text-sm);">Skip</button>
         </div>
       </div>`;
@@ -1477,13 +1481,19 @@ async function renderConversationDetail(stem) {
     html += `<p style="font-size:var(--text-sm);color:var(--color-text-muted);font-style:italic;margin-top:calc(-1 * var(--space-2));">${esc(c.atmosphere)}</p>`;
   }
 
-  if (c.participants && c.participants.length) {
+  const hasUnnamed = unnamedSpeakers.speakers && unnamedSpeakers.speakers.length > 0;
+  if ((c.participants && c.participants.length) || hasUnnamed) {
     html += '<div style="margin-top:var(--space-2);">';
-    c.participants.forEach(p => {
+    (c.participants || []).forEach(p => {
       const roleText = p.role ? ` — ${esc(p.role)}` : '';
       html += `<span style="display:inline-block;background:var(--color-bg-raised);border:1px solid var(--color-border);border-radius:12px;
         padding:2px 10px;margin:0 var(--space-1) var(--space-1) 0;font-size:var(--text-sm);">${esc(p.name)}${roleText}</span>`;
     });
+    if (hasUnnamed) {
+      const n = unnamedSpeakers.speakers.length;
+      html += `<span style="display:inline-block;background:var(--color-bg-page);border:1px dashed var(--color-border);color:var(--color-text-muted);border-radius:12px;
+        padding:2px 10px;margin:0 var(--space-1) var(--space-1) 0;font-size:var(--text-sm);">+${n} unidentified</span>`;
+    }
     html += '</div>';
   }
 
@@ -1711,42 +1721,47 @@ async function reprocessConversation(stem) {
 
 async function submitSpeakerRename(stem, speakerId, inputIndex) {
   const nameInput = document.getElementById(`speaker-name-${inputIndex}`);
-  const enrollCheckbox = document.getElementById(`speaker-enroll-${inputIndex}`);
-  const statusEl = document.getElementById('speaker-rename-status');
   const name = nameInput.value.trim();
+  if (!name) {
+    document.getElementById('speaker-rename-status').textContent = 'Please enter a name first.';
+    return;
+  }
+  const enroll = document.getElementById(`speaker-enroll-${inputIndex}`).checked;
+  await runSpeakerLabelRequest(stem, `/api/conversations/${encodeURIComponent(stem)}/speakers/rename`,
+    { from: speakerId, to: name, enroll }, 'Saving and re-analyzing this conversation — usually takes 10-30 seconds, please wait...');
+}
 
-  if (!name) { statusEl.textContent = 'Please enter a name first.'; return; }
+async function skipSpeaker(stem, speakerId) {
+  await runSpeakerLabelRequest(stem, `/api/conversations/${encodeURIComponent(stem)}/speakers/skip`,
+    { speaker_id: speakerId }, 'Skipping...');
+}
 
-  statusEl.textContent = 'Saving and re-analyzing — this can take a moment...';
+async function runSpeakerLabelRequest(stem, url, body, loadingMessage) {
+  const box = document.getElementById('speaker-label-box');
+  // Disable every button in the box, not just the one clicked — this is a
+  // real, potentially slow request (a genuine LLM call), and leaving
+  // OTHER speakers' Save/Skip buttons clickable during it risks a second
+  // request racing the first, on top of just being confusing to look at.
+  box.querySelectorAll('button, input').forEach(el => el.disabled = true);
+  const statusEl = document.getElementById('speaker-rename-status');
+  statusEl.innerHTML = `<span class="inline-spinner"></span>${esc(loadingMessage)}`;
+
   try {
-    const res = await fetch(`/api/conversations/${encodeURIComponent(stem)}/speakers/rename`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: speakerId, to: name, enroll: enrollCheckbox.checked })
+    const res = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
     });
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      showErrorPanel('Could not save speaker name', body.error || `Server returned ${res.status}`);
+      const errBody = await res.json().catch(() => ({}));
+      showErrorPanel('Could not save', errBody.error || `Server returned ${res.status}`);
+      box.querySelectorAll('button, input').forEach(el => el.disabled = false);
       statusEl.textContent = '';
       return;
     }
     renderConversationDetail(stem);
   } catch (err) {
-    showErrorPanel('Could not save speaker name — could not reach the server', err.message);
+    showErrorPanel('Could not reach the server', err.message);
+    box.querySelectorAll('button, input').forEach(el => el.disabled = false);
     statusEl.textContent = '';
-  }
-}
-
-async function skipSpeaker(stem, speakerId) {
-  try {
-    await fetch(`/api/conversations/${encodeURIComponent(stem)}/speakers/skip`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ speaker_id: speakerId })
-    });
-    renderConversationDetail(stem);
-  } catch (err) {
-    showErrorPanel('Could not skip speaker — could not reach the server', err.message);
   }
 }
 
