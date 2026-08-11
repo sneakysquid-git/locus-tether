@@ -16,8 +16,8 @@ Tether:
 
 ## Table of Contents
 
-- [What is an Omi?](#what-is-an-omi)
 - [What this project is](#what-this-project-is)
+- [What is an Omi?](#what-is-an-omi)
 - [Prior art — is this actually new, and why choose it over the official app?](#prior-art--is-this-actually-new-and-why-choose-it-over-the-official-app)
 - [System architecture (how it actually runs)](#system-architecture-how-it-actually-runs)
 - [Known limitations — read this before you rely on it](#known-limitations--read-this-before-you-rely-on-it)
