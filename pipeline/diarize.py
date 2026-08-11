@@ -35,6 +35,7 @@ after the first recording of the day, competing with other GPU workloads
 (robotics, etc.) at rest between sporadic recordings.
 """
 import gc
+import json
 import logging
 import threading
 import time
@@ -209,6 +210,24 @@ def align_and_diarize(audio_path: Path, result: Dict[str, Any]) -> Dict[str, Any
             diarize_segments = diarize_segments.exclusive_speaker_diarization
         working = whisperx.assign_word_speakers(diarize_segments, working)
         log.info("Diarization complete")
+
+        # Persist raw per-speaker embeddings alongside the transcript,
+        # regardless of whether any of them matched an enrolled profile.
+        # This is what actually enables "use this real recording's
+        # detected voice as an additional enrollment reference" — without
+        # this, a near-miss match (a real voice, just under threshold due
+        # to that specific recording's conditions) has no way to become a
+        # new reference sample after the fact; the embedding that would
+        # fix it is otherwise discarded the moment matching finishes.
+        if speaker_embeddings:
+            try:
+                embeddings_path = config.TRANSCRIPTS_DIR / f"{audio_path.stem}.embeddings.json"
+                embeddings_path.write_text(
+                    json.dumps({k: list(v) for k, v in speaker_embeddings.items()}, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception as e:
+                log.warning("Could not save raw speaker embeddings (non-fatal): %s", e)
     except Exception as e:
         log.warning("Diarization failed: %s, continuing without speaker labels", e)
         return result
