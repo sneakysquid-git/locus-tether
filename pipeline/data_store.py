@@ -117,6 +117,43 @@ def get_speaker_count(stem: str) -> Optional[int]:
     return len(speakers) if speakers else None
 
 
+def get_unnamed_speakers(stem: str) -> list[dict]:
+    """
+    Every anonymous SPEAKER_NN label still present in this conversation's
+    transcript, each with a representative snippet — enough for a person
+    to actually recognize who's who and assign a real name, rather than
+    the app just saying "unidentified" indefinitely. Already-named
+    speakers (a real name, not a SPEAKER_NN code) are deliberately
+    excluded — there's nothing to label there.
+
+    The snippet is that speaker's single LONGEST segment, not their
+    first — a short "yeah" or "mm-hm" early on identifies no one, while
+    a longer stretch of actual talking almost always does.
+    """
+    path = config.TRANSCRIPTS_DIR / f"{stem}.json"
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    longest_by_speaker: dict[str, dict] = {}
+    for seg in data.get("segments", []):
+        speaker = seg.get("speaker")
+        if not speaker or not speaker.startswith("SPEAKER_"):
+            continue
+        text = seg.get("text", "").strip()
+        current = longest_by_speaker.get(speaker)
+        if current is None or len(text) > len(current["text"]):
+            longest_by_speaker[speaker] = {"text": text}
+
+    return [
+        {"speaker_id": speaker_id, "snippet": info["text"][:200]}
+        for speaker_id, info in sorted(longest_by_speaker.items())
+    ]
+
+
 def load_all_speech_coaching() -> list[dict]:
     """
     Every *.speech_coach.json in TRANSCRIPTS_DIR, most recent first (by the

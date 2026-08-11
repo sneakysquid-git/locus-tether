@@ -45,6 +45,7 @@ import data_store
 import integrations
 import todo_state
 import conversation_state
+import skipped_speakers
 import speaker_profiles
 import digest_preferences
 import ui_preferences
@@ -516,6 +517,101 @@ def api_reprocess_conversation(stem: str):
             log.exception("Reprocess: coaching failed for %s (analysis still succeeded)", stem)
 
     return jsonify({"stem": stem, "reprocessed": True, "coaching_ran": coaching_ran})
+
+
+@app.route("/api/conversations/<path:stem>/speakers")
+def api_get_unnamed_speakers(stem: str):
+    speakers = data_store.get_unnamed_speakers(stem)
+    speakers = [s for s in speakers if not skipped_speakers.is_skipped(stem, s["speaker_id"])]
+    return jsonify({"speakers": speakers})
+
+
+@app.route("/api/conversations/<path:stem>/speakers/skip", methods=["POST"])
+def api_skip_speaker(stem: str):
+    body = request.get_json(force=True) or {}
+    speaker_id = (body.get("speaker_id") or "").strip()
+    if not speaker_id:
+        return jsonify({"error": "speaker_id is required"}), 400
+    skipped_speakers.skip(stem, speaker_id)
+    return jsonify({"stem": stem, "speaker_id": speaker_id, "skipped": True})
+
+
+@app.route("/api/conversations/<path:stem>/speakers/rename", methods=["POST"])
+def api_rename_speaker(stem: str):
+    """
+    Relabels an anonymous SPEAKER_NN to a real name throughout this
+    conversation's transcript, then reprocesses analysis so the
+    overview/key_points/action_items reflect the real name too — a rename
+    with no reprocess would fix the transcript but leave the AI-generated
+    summary still saying "the other speaker" until the next unrelated edit.
+
+    Optionally also enrolls this as a standing voice profile (using the
+    same raw embedding diarize.py already saved for this exact recording,
+    see <stem>.embeddings.json) — so a person labeled once here gets
+    auto-recognized in future recordings too, not just this one.
+    """
+    body = request.get_json(force=True) or {}
+    from_id = (body.get("from") or "").strip()
+    to_name = (body.get("to") or "").strip()
+    enroll = bool(body.get("enroll", False))
+
+    if not from_id or not to_name:
+        return jsonify({"error": "Both 'from' and 'to' are required"}), 400
+    if not from_id.startswith("SPEAKER_"):
+        return jsonify({"error": "'from' must be an anonymous SPEAKER_NN label"}), 400
+
+    transcript_path = config.TRANSCRIPTS_DIR / f"{stem}.json"
+    if not transcript_path.exists():
+        abort(404)
+
+    try:
+        result = json.loads(transcript_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        return jsonify({"error": f"Could not read transcript: {e}"}), 500
+
+    renamed_count = 0
+    for seg in result.get("segments", []):
+        if seg.get("speaker") == from_id:
+            seg["speaker"] = to_name
+            renamed_count += 1
+    if renamed_count == 0:
+        return jsonify({"error": f"No segments found with speaker '{from_id}'"}), 404
+
+    transcribe.write_transcript(result, stem)
+
+    enrolled = False
+    if enroll:
+        embeddings_path = config.TRANSCRIPTS_DIR / f"{stem}.embeddings.json"
+        if embeddings_path.exists():
+            try:
+                embeddings = json.loads(embeddings_path.read_text(encoding="utf-8"))
+                if from_id in embeddings:
+                    speaker_profiles.add_profile(to_name, embeddings[from_id])
+                    enrolled = True
+            except (json.JSONDecodeError, OSError) as e:
+                log.warning("Could not read embeddings for enrollment during rename: %s", e)
+        # No embeddings file existing is a real, unremarkable possibility
+        # (recorded before diarize.py's persistence change) — the rename
+        # itself still fully succeeds either way; enrollment is additive.
+
+    analysis_text = transcribe.build_analysis_text(result)
+    analyzer.analyze_and_write(analysis_text, stem)
+
+    coaching_ran = False
+    main_user = speaker_profiles.get_main_user()
+    segment_speakers = {seg.get("speaker") for seg in result.get("segments", [])}
+    if main_user and main_user in segment_speakers:
+        try:
+            report = speech_coach.generate_coaching_report(transcript_path)
+            coaching_path = config.TRANSCRIPTS_DIR / f"{stem}.speech_coach.json"
+            coaching_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+            coaching_ran = True
+        except Exception:  # pylint: disable=broad-exception-caught
+            log.exception("Speaker rename: coaching failed for %s (rename/analysis still succeeded)", stem)
+
+    return jsonify({
+        "stem": stem, "renamed_segments": renamed_count, "enrolled": enrolled, "coaching_ran": coaching_ran,
+    })
 
 
 # --- API: To-Dos -------------------------------------------------------------
@@ -1137,6 +1233,7 @@ async function render(state) {
     if (state.tab === 'feedback') return renderFeedbackDetail(state.detail);
     if (state.tab === 'lists') return renderListDetail(state.detail);
     if (state.tab === 'todos') return renderCompletedTodos();
+    if (state.tab === 'settings' && state.detail === 'speakers') return renderSpeakerManagement();
   }
   if (state.tab === 'today') return renderToday();
   if (state.tab === 'conversations') return renderConversationsList();
@@ -1330,6 +1427,7 @@ async function renderConversationDetail(stem) {
   }
   const c = await res.json();
   window._currentConversation = c;
+  const unnamedSpeakers = await (await fetch(`/api/conversations/${encodeURIComponent(stem)}/speakers`)).json();
   const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
 
   let html = `<h1 style="margin-top:var(--space-2);justify-content:flex-start;gap:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</h1>
@@ -1349,6 +1447,28 @@ async function renderConversationDetail(stem) {
   if (c.speaker_count) {
     const label = c.speaker_count === 1 ? '1 speaker detected' : `${c.speaker_count} speakers detected`;
     html += ` <span style="color:var(--color-text-muted);font-size:var(--text-sm);">${label}</span>`;
+  }
+
+  if (unnamedSpeakers.speakers && unnamedSpeakers.speakers.length) {
+    html += `<div style="background:var(--color-bg-raised);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-3);margin-top:var(--space-3);">
+      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Who said this? Naming a speaker updates this conversation's summary to use their real name instead of "the other speaker."</div>`;
+    unnamedSpeakers.speakers.forEach((s, i) => {
+      html += `<div style="margin-bottom:var(--space-3);">
+        <div style="font-size:var(--text-sm);font-style:italic;color:var(--color-text-muted);margin-bottom:var(--space-1);">"${esc(s.snippet)}"</div>
+        <div style="display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap;">
+          <input type="text" id="speaker-name-${i}" placeholder="Name"
+            style="flex:1;min-width:120px;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:6px 8px;font-size:var(--text-base);">
+          <label style="display:flex;align-items:center;gap:4px;font-size:var(--text-sm);color:var(--color-text-muted);">
+            <input type="checkbox" id="speaker-enroll-${i}" checked style="width:auto;">Remember this voice
+          </label>
+          <button onclick="submitSpeakerRename('${stem}', '${s.speaker_id}', ${i})"
+            style="background:var(--color-accent-strong);color:var(--color-button-text);border:none;border-radius:6px;padding:6px 14px;font-size:var(--text-sm);">Save</button>
+          <button onclick="skipSpeaker('${stem}', '${s.speaker_id}')"
+            style="background:var(--color-bg-page);color:var(--color-text-muted);border:1px solid var(--color-border);border-radius:6px;padding:6px 14px;font-size:var(--text-sm);">Skip</button>
+        </div>
+      </div>`;
+    });
+    html += `<div id="speaker-rename-status" style="font-size:var(--text-sm);color:var(--color-text-muted);"></div></div>`;
   }
 
   html += `<p style="font-size:var(--text-md);line-height:1.6;margin-top:var(--space-3);">${esc(c.overview)}</p>`;
@@ -1586,6 +1706,47 @@ async function reprocessConversation(stem) {
     renderConversationDetail(stem);
   } catch (err) {
     showErrorPanel('Reprocessing failed — could not reach the server', err.message);
+  }
+}
+
+async function submitSpeakerRename(stem, speakerId, inputIndex) {
+  const nameInput = document.getElementById(`speaker-name-${inputIndex}`);
+  const enrollCheckbox = document.getElementById(`speaker-enroll-${inputIndex}`);
+  const statusEl = document.getElementById('speaker-rename-status');
+  const name = nameInput.value.trim();
+
+  if (!name) { statusEl.textContent = 'Please enter a name first.'; return; }
+
+  statusEl.textContent = 'Saving and re-analyzing — this can take a moment...';
+  try {
+    const res = await fetch(`/api/conversations/${encodeURIComponent(stem)}/speakers/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: speakerId, to: name, enroll: enrollCheckbox.checked })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showErrorPanel('Could not save speaker name', body.error || `Server returned ${res.status}`);
+      statusEl.textContent = '';
+      return;
+    }
+    renderConversationDetail(stem);
+  } catch (err) {
+    showErrorPanel('Could not save speaker name — could not reach the server', err.message);
+    statusEl.textContent = '';
+  }
+}
+
+async function skipSpeaker(stem, speakerId) {
+  try {
+    await fetch(`/api/conversations/${encodeURIComponent(stem)}/speakers/skip`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ speaker_id: speakerId })
+    });
+    renderConversationDetail(stem);
+  } catch (err) {
+    showErrorPanel('Could not skip speaker — could not reach the server', err.message);
   }
 }
 
@@ -1843,6 +2004,46 @@ async function renderListDetail(listName) {
   document.getElementById('content').innerHTML = html;
 }
 
+// --- Speaker management (its own page, not just a section inside
+// Settings — a book of business with many named colleagues across many
+// meetings adds up to more entries than belongs embedded in the main
+// Settings page alongside Digest/Vocabulary/Appearance/Data) ---
+
+async function renderSpeakerManagement() {
+  setHeader('', false, true);
+  document.getElementById('content').innerHTML = 'Loading...';
+  const speakers = await (await fetch('/api/speakers')).json();
+
+  let html = '<h1 style="margin-top:var(--space-2);">Speakers</h1>';
+  html += `<p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-3);">
+    Every enrolled voice — including anyone added by naming them on a specific conversation.
+    Sample count is how many reference recordings back that person's match; more samples
+    (different mics, different rooms) generally means more reliable matching.</p>`;
+
+  if (speakers.length) {
+    speakers.forEach(s => {
+      const sampleLabel = s.sample_count === 1 ? '1 sample' : `${s.sample_count} samples`;
+      html += `<div class="list-row" style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <span style="font-weight:600;">${esc(s.name)}</span>
+          ${s.is_main_user ? '<span style="color:var(--color-accent);font-size:var(--text-sm);"> (main user)</span>' : ''}
+          <span style="color:var(--color-text-muted);font-size:var(--text-sm);"> — ${sampleLabel}</span>
+        </div>
+        <div>
+          ${s.is_main_user ? '' : `<button onclick="setMainSpeaker('${esc(s.name)}')"
+              style="background:var(--color-bg-raised);color:var(--color-accent);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Set as main</button>`}
+          <button onclick="deleteSpeaker('${esc(s.name)}')"
+            style="background:var(--color-bg-raised);color:var(--color-danger);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);">Delete</button>
+        </div>
+      </div>`;
+    });
+  } else {
+    html += '<p class="empty">No voices enrolled yet.</p>';
+  }
+
+  document.getElementById('content').innerHTML = html;
+}
+
 // --- Settings (#37: voice enrollment/recognition, more settings likely
 // to live here over time as the project grows) ---
 
@@ -1862,24 +2063,13 @@ async function renderSettings() {
     main user so speaking-style coaching analyzes only your own speech, not whoever
     else is in the room.</p>`;
 
-  if (speakers.length) {
-    speakers.forEach(s => {
-      html += `<div class="list-row" style="display:flex;justify-content:space-between;align-items:center;">
-        <div>
-          <span style="font-weight:600;">${esc(s.name)}</span>
-          ${s.is_main_user ? '<span style="color:var(--color-accent);font-size:var(--text-sm);"> (main user)</span>' : ''}
-        </div>
-        <div>
-          ${s.is_main_user ? '' : `<button onclick="setMainSpeaker('${esc(s.name)}')"
-              style="background:var(--color-bg-raised);color:var(--color-accent);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);margin-right:var(--space-1);">Set as main</button>`}
-          <button onclick="deleteSpeaker('${esc(s.name)}')"
-            style="background:var(--color-bg-raised);color:var(--color-danger);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);">Delete</button>
-        </div>
-      </div>`;
-    });
-  } else {
-    html += '<p class="empty">No voices enrolled yet.</p>';
-  }
+  const speakerSummary = speakers.length === 0 ? 'No voices enrolled yet.'
+    : speakers.length === 1 ? '1 voice enrolled.' : `${speakers.length} voices enrolled.`;
+  html += `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-3);">
+    <span style="font-size:var(--text-sm);color:var(--color-text-muted);">${speakerSummary}</span>
+    <button onclick="goDetail('settings','speakers')"
+      style="background:var(--color-bg-raised);color:var(--color-accent);border:1px solid var(--color-border);border-radius:6px;padding:4px 10px;font-size:var(--text-sm);">Manage all speakers &rarr;</button>
+  </div>`;
 
   html += `
     <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Enroll a New Voice</h2>
@@ -2161,7 +2351,7 @@ async function pollEnrollmentStatus(name, statusEl, failedOnce) {
 
 async function setMainSpeaker(name) {
   await fetch(`/api/speakers/${encodeURIComponent(name)}/set-main`, { method: 'POST' });
-  renderSettings();
+  render(currentState());
 }
 
 async function deleteSpeaker(name) {
@@ -2169,7 +2359,7 @@ async function deleteSpeaker(name) {
     return;
   }
   await fetch(`/api/speakers/${encodeURIComponent(name)}`, { method: 'DELETE' });
-  renderSettings();
+  render(currentState());
 }
 
 async function toggleTodo(id, currentlyDone) {
