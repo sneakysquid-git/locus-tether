@@ -182,9 +182,6 @@ def align_and_diarize(audio_path: Path, result: Dict[str, Any]) -> Dict[str, Any
     language = result.get("language", "en")
     working = {"segments": result["segments"], "language": language}
 
-    # Stage: alignment (word-level timestamps) — improves diarization
-    # accuracy, since speaker assignment works at the word level when
-    # alignment succeeded, not just the coarser whole-segment level.
     try:
         model_a, metadata = _load_align_model(language)
         working = whisperx.align(
@@ -196,19 +193,9 @@ def align_and_diarize(audio_path: Path, result: Dict[str, Any]) -> Dict[str, Any
     finally:
         _clear_gpu_memory()
 
-    # Stage: diarization (who spoke each segment)
     speaker_embeddings = None
     try:
         diarize_model = _load_diarize_pipeline()
-        # UNVERIFIED ON REAL HARDWARE: attempting to request embeddings
-        # alongside diarization, for speaker-identification matching (see
-        # speaker_profiles.py, #37). Based on whisperx-asr-service's own
-        # documented ASR_RETURN_SPEAKER_EMBEDDINGS pattern, but the exact
-        # call signature/return shape for THIS installed version hasn't
-        # been confirmed the way "token=" vs "use_auth_token=" needed
-        # correction earlier — falls back to plain diarization (no
-        # matching, same as before this existed) if this specific call
-        # shape doesn't work, rather than failing the whole pipeline.
         try:
             diarize_segments, speaker_embeddings = diarize_model(audio, return_embeddings=True)
         except TypeError:
@@ -224,15 +211,10 @@ def align_and_diarize(audio_path: Path, result: Dict[str, Any]) -> Dict[str, Any
         log.info("Diarization complete")
     except Exception as e:
         log.warning("Diarization failed: %s, continuing without speaker labels", e)
-        return result  # nothing to merge back — original transcript untouched
+        return result
     finally:
         _clear_gpu_memory()
 
-    # Speaker identification (#37): match each detected SPEAKER_NN's
-    # embedding against enrolled voice profiles, relabeling with a real
-    # name wherever there's a confident match. An unmatched speaker just
-    # keeps its anonymous SPEAKER_NN label, exactly as before enrollment
-    # existed — this is purely additive, never a required step.
     speaker_name_map = {}
     if speaker_embeddings:
         try:
@@ -242,14 +224,26 @@ def align_and_diarize(audio_path: Path, result: Dict[str, Any]) -> Dict[str, Any
                 matched_name = speaker_profiles.match_embedding(embedding)
                 if matched_name:
                     speaker_name_map[speaker_id] = matched_name
+                else:
+                    # No match cleared the threshold — log the closest
+                    # candidate anyway. Without this, a near-miss (e.g. a
+                    # different recording condition, like headphones vs a
+                    # phone mic, shifting the embedding just enough) is
+                    # completely invisible after the fact — this was the
+                    # actual gap when a real match failure needed
+                    # diagnosing and there was nothing but silence to go on.
+                    best = speaker_profiles.best_match_debug(embedding)
+                    if best:
+                        best_name, best_score = best
+                        log.info(
+                            "%s: no match cleared the threshold — closest was %r at similarity %.3f",
+                            speaker_id, best_name, best_score,
+                        )
             if speaker_name_map:
                 log.info("Speaker identification matched: %s", speaker_name_map)
         except Exception as e:
             log.warning("Speaker identification failed (diarization labels unaffected): %s", e)
 
-    # Reshape WhisperX's segment format back into our own stable schema
-    # (start/end/text/speaker) — downstream code never needs to know
-    # anything changed under the hood.
     new_segments = []
     for seg in working.get("segments", []):
         speaker = seg.get("speaker")
@@ -308,10 +302,6 @@ def extract_enrollment_embedding(audio_path: Path) -> Optional[list]:
     if len(speaker_embeddings) == 1:
         return list(next(iter(speaker_embeddings.values())))
 
-    # Multiple detected "speakers" in what should be a single-speaker
-    # sample — pick whichever has the most total speaking time, on the
-    # assumption that brief secondary "speakers" are noise/silence
-    # artifacts, not a second real person.
     try:
         speaking_time: Dict[str, float] = {}
         for _, row in diarize_segments.iterrows():

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 import config
+import custom_vocabulary
 import diarize
 
 log = logging.getLogger("omi.transcribe")
@@ -58,11 +59,13 @@ def transcribe_file(audio_path: Path) -> Dict[str, Any]:
     """
     model = get_model()
 
+    initial_prompt = custom_vocabulary.build_initial_prompt()
     segments_iter, info = model.transcribe(
         str(audio_path),
         language=config.WHISPER_LANGUAGE,
         vad_filter=config.WHISPER_VAD_FILTER,
         condition_on_previous_text=config.WHISPER_CONDITION_ON_PREVIOUS_TEXT,
+        initial_prompt=initial_prompt if initial_prompt else None,
     )
 
     segments = []

@@ -49,6 +49,7 @@ import speaker_profiles
 import digest_preferences
 import ui_preferences
 import manual_todos
+import custom_vocabulary
 import analyzer
 import transcribe
 import speech_coach
@@ -845,6 +846,21 @@ def api_save_digest_settings():
         return jsonify({"error": "An email address is required to enable the daily digest"}), 400
     digest_preferences.set_preferences(enabled, email)
     return jsonify({"enabled": enabled, "email": email})
+
+
+@app.route("/api/settings/vocabulary")
+def api_get_vocabulary():
+    return jsonify({"terms": custom_vocabulary.get_vocabulary()})
+
+
+@app.route("/api/settings/vocabulary", methods=["POST"])
+def api_save_vocabulary():
+    body = request.get_json(force=True) or {}
+    terms = body.get("terms", [])
+    if not isinstance(terms, list):
+        return jsonify({"error": "terms must be a list of strings"}), 400
+    custom_vocabulary.set_vocabulary(terms)
+    return jsonify({"terms": custom_vocabulary.get_vocabulary()})
 
 
 # --- API: Feedback -----------------------------------------------------------
@@ -1837,6 +1853,7 @@ async function renderSettings() {
   const digestSettings = await (await fetch('/api/settings/digest')).json();
   const uiSettings = await (await fetch('/api/settings/ui')).json();
   const status = await (await fetch('/api/settings/status')).json();
+  const vocabData = await (await fetch('/api/settings/vocabulary')).json();
 
   let html = '<h1 style="margin-top:var(--space-2);">Settings</h1>';
   html += '<h2 style="font-size:var(--text-md);">Voice Recognition</h2>';
@@ -1893,6 +1910,18 @@ async function renderSettings() {
     <button onclick="submitDigestSettings()"
       style="width:100%;background:var(--color-accent-strong);color:var(--color-button-text);border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Save</button>
     <div id="digest-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--color-text-muted);"></div>
+
+    <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Custom Vocabulary</h2>
+    <p style="font-size:var(--text-sm);color:var(--color-text-muted);">Names, tool names, or acronyms that
+      keep getting mis-transcribed (e.g. a colleague's name heard as a common word). One per line — these get
+      fed to transcription as a hint, not a guarantee, so unusual spellings may still occasionally slip through.</p>
+    <textarea id="vocab-input" rows="6"
+      style="width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;
+      color:var(--color-text-primary);padding:8px;font-size:var(--text-base);margin-bottom:var(--space-3);
+      box-sizing:border-box;font-family:inherit;">${(vocabData.terms || []).join('\\n')}</textarea>
+    <button onclick="submitVocabulary()"
+      style="width:100%;background:var(--color-accent-strong);color:var(--color-button-text);border:none;border-radius:6px;padding:12px;font-size:var(--text-base);">Save</button>
+    <div id="vocab-status" style="margin-top:var(--space-3);font-size:var(--text-sm);color:var(--color-text-muted);"></div>
 
     <h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Appearance</h2>
     <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Theme</p>
@@ -2044,6 +2073,28 @@ async function submitDigestSettings() {
   } catch (err) {
     showErrorPanel('Could not save digest settings — could not reach the server', err.message);
     statusEl.textContent = '';
+  }
+}
+
+async function submitVocabulary() {
+  const raw = document.getElementById('vocab-input').value;
+  const terms = raw.split('\\n').map(t => t.trim()).filter(Boolean);
+  const statusEl = document.getElementById('vocab-status');
+  statusEl.textContent = 'Saving...';
+  try {
+    const res = await fetch('/api/settings/vocabulary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ terms })
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showErrorPanel('Could not save vocabulary', body.error || `Server returned ${res.status}`);
+      return;
+    }
+    statusEl.textContent = `Saved ${terms.length} term(s).`;
+  } catch (err) {
+    showErrorPanel('Could not save vocabulary — could not reach the server', err.message);
   }
 }
 
