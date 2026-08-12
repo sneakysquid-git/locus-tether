@@ -150,6 +150,47 @@ def build_analysis_text(result: Dict[str, Any]) -> str:
     else:
         note = f"[This conversation had {len(speakers)} distinct speakers.]"
 
+    # 2+ REAL named speakers is a genuinely different situation from the
+    # single-name case above, and needs different handling: with only one
+    # real name in play, the model never has to decide WHICH of several
+    # real people said something, so the flowing prose + short note above
+    # (already tested, already working) is left completely untouched.
+    # But once there are two or more real names, a bug surfaced in
+    # practice — the model has zero per-sentence attribution to work
+    # from, and was consistently mis-attributing one named person's own
+    # statements and action items to the OTHER named person (confirmed:
+    # the underlying transcript segment labels were correct throughout —
+    # speech coaching, which reads those labels directly rather than
+    # inferring from prose, got it right every time). Marking only actual
+    # speaker CHANGES (not every line) is a middle ground: it gives the
+    # model the real per-turn attribution it was missing, without fully
+    # reformatting into per-line dialogue, which is what caused the
+    # earlier, separately-documented key_points/hallucination regression.
+    if len(known_names) >= 2:
+        turns = []
+        current_speaker = None
+        current_words: list[str] = []
+        for seg in segments:
+            speaker = seg.get("speaker")
+            seg_text = seg.get("text", "").strip()
+            if not seg_text:
+                continue
+            if speaker != current_speaker:
+                if current_words:
+                    turns.append((current_speaker, " ".join(current_words)))
+                current_speaker = speaker
+                current_words = [seg_text]
+            else:
+                current_words.append(seg_text)
+        if current_words:
+            turns.append((current_speaker, " ".join(current_words)))
+
+        labeled_text = "\n\n".join(
+            f"[{spk if spk and not spk.startswith('SPEAKER_') else 'Unidentified speaker'}]: {turn_text}"
+            for spk, turn_text in turns
+        )
+        return f"{note}\n\n{labeled_text}"
+
     return f"{note}\n\n{text}"
 
 
