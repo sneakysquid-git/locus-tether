@@ -59,6 +59,22 @@ log = logging.getLogger("omi.webapp")
 
 app = Flask(__name__)
 
+# The mobile wrapper's offline-essentials cache (see mobile-app/www/index.html)
+# fetches a few endpoints directly, independent of the iframe, so it has
+# something to show on a cold app launch while genuinely offline. That's a
+# real cross-origin read (the wrapper's own origin vs. this server's), which
+# CORS blocks by default - confirmed directly, not a theoretical concern.
+# Scoped narrowly to just the specific read-only GET endpoints actually used
+# for this, not a blanket policy for the whole app.
+_CORS_ALLOWED_PATHS = {"/api/today", "/api/conversations", "/api/todos"}
+
+
+@app.after_request
+def _add_cors_for_wrapper_cache(response):
+    if request.path in _CORS_ALLOWED_PATHS and request.method == "GET":
+        response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
+
 
 # --- Serialization helpers -------------------------------------------------
 
