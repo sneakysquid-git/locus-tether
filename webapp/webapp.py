@@ -1197,6 +1197,66 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// --- Offline read cache (Option A: read-only, not full sync) ---
+//
+// The wrapper app can't cache anything itself - it loads this whole page
+// via an iframe from a different origin, and cross-origin restrictions
+// mean it has no visibility into what's happening inside. So this lives
+// here instead, in the webapp's own JS - which also means a regular
+// browser gets the same benefit, not just the mobile wrapper.
+//
+// Deliberately READ-ONLY: only GET-style data fetches go through this.
+// Anything that writes (saving settings, checking off a to-do, renaming
+// a speaker) is left as a plain fetch - queuing and reconciling offline
+// edits is a genuinely different, larger problem than "let me still see
+// my data when the Thor's unreachable," which is the actual gap this is
+// solving. A live system-status check or an in-progress enrollment poll
+// are deliberately NOT cached either - a stale "Ollama is reachable"
+// reading would be actively misleading, not helpful, when actually
+// offline.
+const CACHE_PREFIX = 'lt_cache_';
+
+async function cachedFetch(url) {
+  const cacheKey = CACHE_PREFIX + url;
+  let res;
+  try {
+    res = await fetch(url);
+  } catch (networkErr) {
+    // Genuine network failure (server unreachable) - this is exactly
+    // what the cache fallback is for.
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      return { data: parsed.data, fromCache: true, timestamp: parsed.timestamp };
+    }
+    throw networkErr;
+  }
+  if (!res.ok) {
+    // The server WAS reached and gave a real answer (404, 500, etc.) -
+    // this isn't a connectivity problem, so it should surface as a real
+    // error rather than silently showing stale cached data in its place
+    // (e.g. a since-deleted conversation shouldn't appear to still exist
+    // just because an old cached copy is sitting in local storage).
+    throw new Error(`Server returned ${res.status}`);
+  }
+  const data = await res.json();
+  try {
+    localStorage.setItem(cacheKey, JSON.stringify({ data, timestamp: Date.now() }));
+  } catch (storageErr) {
+    // Storage can genuinely fail (quota exceeded, private browsing) -
+    // that's a reason to skip caching THIS response, not a reason to
+    // fail the live request that already succeeded.
+  }
+  return { data, fromCache: false, timestamp: Date.now() };
+}
+
+function cacheBannerHtml(timestamp) {
+  const timeStr = new Date(timestamp).toLocaleString();
+  return `<div style="background:var(--color-bg-raised);border:1px solid var(--color-border);border-left:3px solid var(--color-accent);
+    border-radius:6px;padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);font-size:var(--text-sm);color:var(--color-text-muted);">
+    Showing cached data from ${esc(timeStr)} — couldn't reach the server just now.</div>`;
+}
+
 // Small owner-attribution tag, shown next to an action item only when it
 // has one (multi-person meetings with named participants) — stays absent
 // entirely for personal-conversation action items, where owner is null.
@@ -1268,7 +1328,7 @@ function setHeader(title, showRefresh, showBack) {
 async function renderToday() {
   setHeader('', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
-  const data = await (await fetch('/api/today')).json();
+  const { data, fromCache, timestamp } = await cachedFetch('/api/today');
 
   // --- Greeting + waveform signature (#51 follow-up: "homepage
   // prettification") — the one deliberate visual flourish on this page,
@@ -1284,7 +1344,8 @@ async function renderToday() {
     `<div style="width:3px;height:${h}px;background:var(--color-accent);border-radius:2px;opacity:0.55;"></div>`
   ).join('');
 
-  let html = `
+  let html = fromCache ? cacheBannerHtml(timestamp) : '';
+  html += `
     <div style="display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-4);">
       <div style="display:flex;align-items:flex-end;gap:2px;height:18px;">${waveformBars}</div>
       <h1 style="margin:0;font-size:var(--text-lg);">${greeting}</h1>
@@ -1399,14 +1460,14 @@ async function renderToday() {
 async function renderConversationsList() {
   setHeader('Conversations', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
-  const data = await (await fetch('/api/conversations')).json();
+  const { data, fromCache, timestamp } = await cachedFetch('/api/conversations');
 
   if (!data.length) {
-    document.getElementById('content').innerHTML = '<p class="empty">No conversations yet.</p>';
+    document.getElementById('content').innerHTML = (fromCache ? cacheBannerHtml(timestamp) : '') + '<p class="empty">No conversations yet.</p>';
     return;
   }
 
-  let html = '';
+  let html = fromCache ? cacheBannerHtml(timestamp) : '';
   data.forEach(c => {
     const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
     html += `<div class="list-row" onclick="goDetail('conversations', '${esc(c.stem)}')">
@@ -1424,17 +1485,19 @@ async function renderConversationsList() {
 async function renderConversationDetail(stem) {
   setHeader('', false, true);
   document.getElementById('content').innerHTML = 'Loading...';
-  const res = await fetch(`/api/conversations/${encodeURIComponent(stem)}`);
-  if (!res.ok) {
+  let c, unnamedSpeakers, fromCache = false, timestamp = null;
+  try {
+    ({ data: c, fromCache, timestamp } = await cachedFetch(`/api/conversations/${encodeURIComponent(stem)}`));
+    ({ data: unnamedSpeakers } = await cachedFetch(`/api/conversations/${encodeURIComponent(stem)}/speakers`));
+  } catch (err) {
     document.getElementById('content').innerHTML = '<p class="empty">Not found.</p>';
     return;
   }
-  const c = await res.json();
   window._currentConversation = c;
-  const unnamedSpeakers = await (await fetch(`/api/conversations/${encodeURIComponent(stem)}/speakers`)).json();
   const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
 
-  let html = `<h1 style="margin-top:var(--space-2);justify-content:flex-start;gap:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</h1>
+  let html = fromCache ? cacheBannerHtml(timestamp) : '';
+  html += `<h1 style="margin-top:var(--space-2);justify-content:flex-start;gap:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</h1>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);">
       <div class="date-label">${esc(c.date)} — ${c.start_time ? esc(c.start_time) + ' to ' + esc(c.time) : esc(c.time)}</div>
       <div>
@@ -1770,15 +1833,18 @@ let _todosShowTodayOnly = false;
 async function renderTodos() {
   setHeader('To-Dos', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
-  const items = await (await fetch('/api/todos')).json();
+  const { data: items, fromCache: itemsCached, timestamp: itemsTs } = await cachedFetch('/api/todos');
   // Authoritative "today" comes from the server (already computed correctly
   // for #10/#14's date-scoping elsewhere) rather than being recomputed in
   // JS — a client-side new Date() could disagree with the server's local
   // time near a midnight boundary, silently filtering the wrong items.
-  const todayData = await (await fetch('/api/today')).json();
+  const { data: todayData, fromCache: todayCached, timestamp: todayTs } = await cachedFetch('/api/today');
   const todayStr = todayData.date;
+  const fromCache = itemsCached || todayCached;
+  const timestamp = itemsCached ? itemsTs : todayTs;
 
-  let html = `<div style="margin-bottom:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
+  let html = fromCache ? cacheBannerHtml(timestamp) : '';
+  html += `<div style="margin-bottom:var(--space-3);display:flex;gap:var(--space-2);flex-wrap:wrap;">
     <button onclick="toggleTodosFilter()"
       style="background:${_todosShowTodayOnly ? 'var(--color-accent-strong)' : 'var(--color-bg-raised)'};
       color:${_todosShowTodayOnly ? 'var(--color-button-text)' : 'var(--color-text-muted)'};
@@ -1872,9 +1938,9 @@ function toggleTodosFilter() {
 async function renderCompletedTodos() {
   setHeader('', false, true);
   document.getElementById('content').innerHTML = 'Loading...';
-  const items = await (await fetch('/api/todos/completed')).json();
+  const { data: items, fromCache, timestamp } = await cachedFetch('/api/todos/completed');
 
-  let html = '<h1 style="margin-top:var(--space-2);">Completed Today</h1>';
+  let html = (fromCache ? cacheBannerHtml(timestamp) : '') + '<h1 style="margin-top:var(--space-2);">Completed Today</h1>';
 
   if (!items.length) {
     html += '<p class="empty">Nothing checked off yet today.</p>';
@@ -1899,15 +1965,15 @@ async function renderCompletedTodos() {
 async function renderFeedbackList() {
   setHeader('Speaking Style Feedback', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
-  const data = await (await fetch('/api/feedback')).json();
+  const { data, fromCache, timestamp } = await cachedFetch('/api/feedback');
 
   if (!data.length) {
-    document.getElementById('content').innerHTML =
+    document.getElementById('content').innerHTML = (fromCache ? cacheBannerHtml(timestamp) : '') +
       '<p class="empty">No speaking-style coaching run yet. Use speech_coach.py on a recording to generate one.</p>';
     return;
   }
 
-  let html = '';
+  let html = fromCache ? cacheBannerHtml(timestamp) : '';
   data.forEach(sc => {
     html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
       <div style="display:flex;justify-content:space-between;">
@@ -1960,28 +2026,29 @@ function renderFeedbackCardHtml(sc, title) {
 async function renderFeedbackDetail(stem) {
   setHeader('', false, true);
   document.getElementById('content').innerHTML = 'Loading...';
-  const res = await fetch(`/api/feedback/${encodeURIComponent(stem)}`);
-  if (!res.ok) {
+  let sc, fromCache, timestamp;
+  try {
+    ({ data: sc, fromCache, timestamp } = await cachedFetch(`/api/feedback/${encodeURIComponent(stem)}`));
+  } catch (err) {
     document.getElementById('content').innerHTML = '<p class="empty">Not found.</p>';
     return;
   }
-  const sc = await res.json();
-  document.getElementById('content').innerHTML =
+  document.getElementById('content').innerHTML = (fromCache ? cacheBannerHtml(timestamp) : '') +
     `<h1 style="margin-top:var(--space-2);">${esc(sc.title)}</h1>` + renderFeedbackCardHtml(sc, sc.title);
 }
 
 async function renderListsList() {
   setHeader('Lists', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
-  const data = await (await fetch('/api/lists')).json();
+  const { data, fromCache, timestamp } = await cachedFetch('/api/lists');
 
   if (!data.length) {
-    document.getElementById('content').innerHTML =
+    document.getElementById('content').innerHTML = (fromCache ? cacheBannerHtml(timestamp) : '') +
       '<p class="empty">Nothing yet. Mention wanting to check something out (a movie, restaurant, etc.) and it will show up here.</p>';
     return;
   }
 
-  let html = '';
+  let html = fromCache ? cacheBannerHtml(timestamp) : '';
   data.forEach(l => {
     html += `<div class="list-row" onclick="goDetail('lists', '${esc(l.list_name)}')">
       <div style="display:flex;justify-content:space-between;align-items:baseline;">
@@ -1996,14 +2063,15 @@ async function renderListsList() {
 async function renderListDetail(listName) {
   setHeader('', false, true);
   document.getElementById('content').innerHTML = 'Loading...';
-  const res = await fetch(`/api/lists/${encodeURIComponent(listName)}`);
-  if (!res.ok) {
+  let data, fromCache, timestamp;
+  try {
+    ({ data, fromCache, timestamp } = await cachedFetch(`/api/lists/${encodeURIComponent(listName)}`));
+  } catch (err) {
     document.getElementById('content').innerHTML = '<p class="empty">Not found.</p>';
     return;
   }
-  const data = await res.json();
 
-  let html = `<h1 style="margin-top:var(--space-2);">${esc(data.list_name)}</h1>`;
+  let html = (fromCache ? cacheBannerHtml(timestamp) : '') + `<h1 style="margin-top:var(--space-2);">${esc(data.list_name)}</h1>`;
   if (!data.items.length) {
     html += '<p class="empty">Nothing left on this list.</p>';
   } else {
@@ -2027,9 +2095,9 @@ async function renderListDetail(listName) {
 async function renderSpeakerManagement() {
   setHeader('', false, true);
   document.getElementById('content').innerHTML = 'Loading...';
-  const speakers = await (await fetch('/api/speakers')).json();
+  const { data: speakers, fromCache, timestamp } = await cachedFetch('/api/speakers');
 
-  let html = '<h1 style="margin-top:var(--space-2);">Speakers</h1>';
+  let html = (fromCache ? cacheBannerHtml(timestamp) : '') + '<h1 style="margin-top:var(--space-2);">Speakers</h1>';
   html += `<p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-3);">
     Every enrolled voice — including anyone added by naming them on a specific conversation.
     Sample count is how many reference recordings back that person's match; more samples
@@ -2065,13 +2133,32 @@ async function renderSpeakerManagement() {
 async function renderSettings() {
   setHeader('', false, true);
   document.getElementById('content').innerHTML = 'Loading...';
-  const speakers = await (await fetch('/api/speakers')).json();
-  const digestSettings = await (await fetch('/api/settings/digest')).json();
-  const uiSettings = await (await fetch('/api/settings/ui')).json();
-  const status = await (await fetch('/api/settings/status')).json();
-  const vocabData = await (await fetch('/api/settings/vocabulary')).json();
+  const { data: speakers, fromCache: speakersCached, timestamp: speakersTs } = await cachedFetch('/api/speakers');
+  const { data: digestSettings } = await cachedFetch('/api/settings/digest');
+  const { data: uiSettings } = await cachedFetch('/api/settings/ui');
+  const { data: vocabData } = await cachedFetch('/api/settings/vocabulary');
+  // System status is deliberately NOT cached - a stale "Ollama is
+  // reachable" reading from an earlier session would be actively
+  // misleading, not helpful, when genuinely offline right now. Given a
+  // real chance of failure here specifically, this gets its own
+  // fallback matching the shape the rendering below expects, so one
+  // failed live check doesn't take down the rest of this page (which can
+  // still show correctly from cache).
+  let status;
+  try {
+    status = await (await fetch('/api/settings/status')).json();
+  } catch (err) {
+    status = {
+      ollama: { reachable: false, error: "Couldn't check — offline" },
+      pipeline_container: { running: null, error: "Couldn't check — offline" },
+      disk: { free_gb: null, total_gb: null, percent_used: null },
+      config: { diarization_enabled: false, auto_speech_coaching_enabled: false },
+    };
+  }
+  const fromCache = speakersCached;
+  const timestamp = speakersTs;
 
-  let html = '<h1 style="margin-top:var(--space-2);">Settings</h1>';
+  let html = (fromCache ? cacheBannerHtml(timestamp) : '') + '<h1 style="margin-top:var(--space-2);">Settings</h1>';
   html += '<h2 style="font-size:var(--text-md);">Voice Recognition</h2>';
   html += `<p style="font-size:var(--text-sm);color:var(--color-text-muted);">Enroll a voice once, and future conversations will show that
     person's real name instead of an anonymous speaker label. Mark yourself as the
