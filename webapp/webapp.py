@@ -1236,10 +1236,24 @@ async function cachedFetch(url) {
   const cacheKey = CACHE_PREFIX + url;
   let res;
   try {
-    res = await fetch(url);
+    // A fetch to a genuinely unreachable host doesn't always fail
+    // quickly - it can hang for a long time before the browser actually
+    // gives up, especially in a WebView. Without an explicit timeout,
+    // that hang means this function never reaches the catch block below
+    // at all, leaving the whole page stuck on "Loading..." indefinitely
+    // instead of falling back to cache - confirmed as a real, reproduced
+    // gap, not just a theoretical one.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    try {
+      res = await fetch(url, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
   } catch (networkErr) {
-    // Genuine network failure (server unreachable) - this is exactly
-    // what the cache fallback is for.
+    // Genuine network failure OR our own timeout above (both look the
+    // same here - either way, the live request didn't come back in a
+    // reasonable time) - this is exactly what the cache fallback is for.
     const cached = localStorage.getItem(cacheKey);
     if (cached) {
       const parsed = JSON.parse(cached);
