@@ -17,7 +17,7 @@ from prompts import SYSTEM_PROMPT, build_user_prompt
 log = logging.getLogger("omi.analyzer")
 
 EXPECTED_KEYS = {
-    "title", "overview", "category", "atmosphere", "participants", "key_points",
+    "title", "overview", "category", "atmosphere", "participants", "topics",
     "decisions_made", "action_items", "key_facts", "mentioned_lists",
 }
 
@@ -145,6 +145,22 @@ def analyze_transcript(transcript_text: str) -> dict:
     if suspicious:
         log.warning("Removed key_facts with a number not found in the source transcript: %s", suspicious)
         result["key_facts"] = [f for f in key_facts if f not in suspicious]
+
+    # Same fabrication risk, same check, applied to topic details too —
+    # a number can be repurposed into a fabricated claim there just as
+    # easily as in key_facts, and topics/details is new enough (see the
+    # restructuring this was added alongside) that it hasn't had the
+    # benefit of real-world testing key_facts already had when this
+    # check was first added.
+    for topic in result.get("topics", []):
+        details = topic.get("details", [])
+        suspicious_details = _find_unsupported_numbers(details, transcript_text)
+        if suspicious_details:
+            log.warning(
+                "Removed topic details with a number not found in the source transcript (topic=%r): %s",
+                topic.get("topic"), suspicious_details,
+            )
+            topic["details"] = [d for d in details if d not in suspicious_details]
 
     return result
 

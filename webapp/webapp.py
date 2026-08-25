@@ -136,6 +136,13 @@ def _full_conversation(a: dict) -> dict:
         "atmosphere": a.get("atmosphere"),
         "speaker_count": data_store.get_speaker_count(stem),
         "participants": [p for p in a.get("participants", []) if p.get("name")],
+        # "topics" is the current schema (a structured breakdown by
+        # subject/agenda item); "key_points" is kept alongside it purely
+        # for conversations analyzed before this existed and never
+        # reprocessed since - the frontend prefers topics when present
+        # and falls back to the old flat key_points list otherwise,
+        # rather than this needing a one-time data migration.
+        "topics": a.get("topics", []),
         "key_points": a.get("key_points", []),
         "decisions_made": a.get("decisions_made", []),
         "key_facts": a.get("key_facts", []),
@@ -406,7 +413,7 @@ def api_update_conversation(stem: str):
             if field in body:
                 a[field] = body[field]
 
-        for field in ("key_facts", "key_points", "decisions_made"):
+        for field in ("key_facts", "decisions_made"):
             if field in body:
                 a[field] = [str(x).strip() for x in body[field] if str(x).strip()]
 
@@ -416,6 +423,22 @@ def api_update_conversation(stem: str):
                 for p in body["participants"]
                 if str(p.get("name") or "").strip()
             ]
+
+        if "topics" in body:
+            new_topics = []
+            for t in body["topics"]:
+                topic_name = str(t.get("topic") or "").strip()
+                if not topic_name:
+                    continue
+                details = [str(d).strip() for d in t.get("details", []) if str(d).strip()]
+                new_topics.append(
+                    {
+                        "topic": topic_name,
+                        "summary": str(t.get("summary") or "").strip(),
+                        "details": details,
+                    }
+                )
+            a["topics"] = new_topics
 
         if "action_items" in body:
             # completed status is deliberately preserved from the existing
@@ -557,7 +580,7 @@ def api_rename_speaker(stem: str):
     """
     Relabels an anonymous SPEAKER_NN to a real name throughout this
     conversation's transcript, then reprocesses analysis so the
-    overview/key_points/action_items reflect the real name too — a rename
+    overview/topics/action_items reflect the real name too — a rename
     with no reprocess would fix the transcript but leave the AI-generated
     summary still saying "the other speaker" until the next unrelated edit.
 
@@ -1590,7 +1613,26 @@ async function renderConversationDetail(stem) {
     html += '</div>';
   }
 
-  if (c.key_points && c.key_points.length) {
+  if (c.topics && c.topics.length) {
+    html += '<h2 style="font-size:var(--text-md);">Topics discussed</h2>';
+    c.topics.forEach(t => {
+      html += `<div style="margin-bottom:var(--space-4);">
+        <h3 style="font-size:var(--text-base);font-weight:600;margin-bottom:var(--space-1);">${esc(t.topic)}</h3>`;
+      if (t.summary) {
+        html += `<p style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">${esc(t.summary)}</p>`;
+      }
+      if (t.details && t.details.length) {
+        html += '<ul style="font-size:var(--text-base);margin-top:0;">';
+        t.details.forEach(d => { html += `<li style="margin-bottom:var(--space-1);">${esc(d)}</li>`; });
+        html += '</ul>';
+      }
+      html += '</div>';
+    });
+  } else if (c.key_points && c.key_points.length) {
+    // Fallback for conversations analyzed before the topics restructuring
+    // and never reprocessed since - this conversation's own analysis.json
+    // still only has the old flat key_points field, so that's rendered
+    // instead of showing nothing.
     html += '<h2 style="font-size:var(--text-md);">Key points</h2><ol style="font-size:var(--text-base);">';
     c.key_points.forEach(kp => { html += `<li style="margin-bottom:var(--space-2);">${esc(kp)}</li>`; });
     html += '</ol>';
@@ -1630,7 +1672,7 @@ async function renderConversationDetail(stem) {
 // --- Conversation editing (#41: correct anything the LLM got wrong) ---
 // Generic helpers for the repeated "list of rows, each with 1-3 text
 // fields, add/remove buttons" pattern — reused for participants,
-// key_points, decisions_made, key_facts, and action_items rather than
+// decisions_made, key_facts, and action_items rather than
 // writing near-duplicate code five times.
 
 function renderEditRows(rowsData, placeholders) {
@@ -1677,6 +1719,62 @@ function gatherEditRows(containerId) {
   return rows;
 }
 
+// Topics need their own editing pattern rather than reusing
+// renderEditRows/gatherEditRows directly - "details" is a variable-length
+// list of bullets nested inside each topic, which doesn't fit the
+// generic helper's fixed-width-row-of-single-line-inputs shape. Each
+// detail bullet is one line in a textarea (same one-item-per-line
+// convention already used for custom vocabulary elsewhere), rather than
+// building out full nested add/remove rows for a first version of this.
+function renderTopicEditRows(topics) {
+  let html = '';
+  topics.forEach(t => {
+    html += `<div class="edit-topic-row" style="border:1px solid var(--color-border);border-radius:8px;padding:var(--space-3);margin-bottom:var(--space-3);">
+      <input type="text" class="edit-topic-name" placeholder="Topic name" value="${esc(t.topic || '')}"
+        style="width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:6px 8px;margin-bottom:var(--space-2);box-sizing:border-box;font-weight:600;">
+      <input type="text" class="edit-topic-summary" placeholder="One-sentence summary" value="${esc(t.summary || '')}"
+        style="width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:6px 8px;margin-bottom:var(--space-2);box-sizing:border-box;">
+      <textarea class="edit-topic-details" placeholder="Details, one per line" rows="4"
+        style="width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:6px 8px;box-sizing:border-box;">${esc((t.details || []).join('\\n'))}</textarea>
+      <button type="button" onclick="this.parentElement.remove()"
+        style="background:var(--color-bg-danger);color:var(--color-danger);border:none;border-radius:6px;padding:6px 12px;margin-top:var(--space-2);">Remove topic</button>
+    </div>`;
+  });
+  return html;
+}
+
+function addTopicEditRow(containerId) {
+  const container = document.getElementById(containerId);
+  const div = document.createElement('div');
+  div.className = 'edit-topic-row';
+  div.style.cssText = 'border:1px solid var(--color-border);border-radius:8px;padding:12px;margin-bottom:12px;';
+  div.innerHTML = `
+    <input type="text" class="edit-topic-name" placeholder="Topic name"
+      style="width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:6px 8px;margin-bottom:8px;box-sizing:border-box;font-weight:600;">
+    <input type="text" class="edit-topic-summary" placeholder="One-sentence summary"
+      style="width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:6px 8px;margin-bottom:8px;box-sizing:border-box;">
+    <textarea class="edit-topic-details" placeholder="Details, one per line" rows="4"
+      style="width:100%;background:var(--color-bg-page);border:1px solid var(--color-border);border-radius:6px;color:var(--color-text-primary);padding:6px 8px;box-sizing:border-box;"></textarea>
+    <button type="button" style="background:var(--color-bg-danger);color:var(--color-danger);border:none;border-radius:6px;padding:6px 12px;margin-top:8px;">Remove topic</button>
+  `;
+  div.querySelector('button').onclick = () => div.remove();
+  container.appendChild(div);
+}
+
+function gatherTopicEditRows(containerId) {
+  const container = document.getElementById(containerId);
+  const topics = [];
+  container.querySelectorAll('.edit-topic-row').forEach(row => {
+    const topic = row.querySelector('.edit-topic-name').value.trim();
+    if (!topic) return; // an unnamed topic row is dropped entirely, same as a blank row elsewhere
+    const summary = row.querySelector('.edit-topic-summary').value.trim();
+    const details = row.querySelector('.edit-topic-details').value
+      .split('\\n').map(d => d.trim()).filter(d => d);
+    topics.push({ topic, summary, details });
+  });
+  return topics;
+}
+
 function renderConversationEditForm(stem) {
   const c = window._currentConversation;
   setHeader('', false, true);
@@ -1701,9 +1799,9 @@ function renderConversationEditForm(stem) {
     <div id="edit-participants">${renderEditRows((c.participants || []).map(p => [p.name, p.role || '']), ['Name', 'Role'])}</div>
     <button type="button" onclick="addEditRow('edit-participants', ['Name', 'Role'])" style="${addBtnStyle}">+ Add participant</button>
 
-    <h2 style="font-size:var(--text-md);">Key points</h2>
-    <div id="edit-key_points">${renderEditRows((c.key_points || []).map(k => [k]), ['Key point'])}</div>
-    <button type="button" onclick="addEditRow('edit-key_points', ['Key point'])" style="${addBtnStyle}">+ Add key point</button>
+    <h2 style="font-size:var(--text-md);">Topics</h2>
+    <div id="edit-topics">${renderTopicEditRows(c.topics && c.topics.length ? c.topics : (c.key_points || []).map(k => ({ topic: '', summary: k, details: [] })))}</div>
+    <button type="button" onclick="addTopicEditRow('edit-topics')" style="${addBtnStyle}">+ Add topic</button>
 
     <h2 style="font-size:var(--text-md);">Decisions made</h2>
     <div id="edit-decisions_made">${renderEditRows((c.decisions_made || []).map(d => [d]), ['Decision'])}</div>
@@ -1751,7 +1849,7 @@ async function saveConversationEdits(stem) {
     participants: gatherEditRows('edit-participants')
       .filter(([name]) => name)
       .map(([name, role]) => ({ name, role: role || null })),
-    key_points: gatherEditRows('edit-key_points').map(([v]) => v).filter(v => v),
+    topics: gatherTopicEditRows('edit-topics'),
     decisions_made: gatherEditRows('edit-decisions_made').map(([v]) => v).filter(v => v),
     key_facts: gatherEditRows('edit-key_facts').map(([v]) => v).filter(v => v),
     action_items: gatherEditRows('edit-action_items')
