@@ -226,13 +226,19 @@ def aggregate_lists() -> list[dict]:
         date_str = a.get("_date", "")
         timestamp = a.get("_timestamp", 0)
         for list_idx, mlist in enumerate(a.get("mentioned_lists", [])):
-            name = mlist.get("list_name", "Misc").strip()
+            # `.get(key, default)` only falls back to the default when the
+            # key is entirely ABSENT - if a past analysis has this field
+            # explicitly set to null (not missing, just empty), .get()
+            # still returns None here, and .strip()/enumerate() on None
+            # crashes. `or` catches both cases (missing key AND explicit
+            # null), since None is falsy either way.
+            name = (mlist.get("list_name") or "Misc").strip()
             normalized = name.lower()
             if normalized not in groups:
                 groups[normalized] = {"display_name": name, "items": []}
             elif _looks_better_capitalized(name, groups[normalized]["display_name"]):
                 groups[normalized]["display_name"] = name
-            for item_idx, item_text in enumerate(mlist.get("items", [])):
+            for item_idx, item_text in enumerate(mlist.get("items") or []):
                 groups[normalized]["items"].append(
                     {
                         "id": f"{stem}:mlist:{list_idx}:{item_idx}",
