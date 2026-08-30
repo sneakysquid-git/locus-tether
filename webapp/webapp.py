@@ -1027,7 +1027,7 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="theme-color" content="#0d1117">
 <title>LocusTether</title>
 <style>
@@ -1123,7 +1123,10 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   :root[data-text-size="large"] { --text-scale: 1.15; }
   * { box-sizing: border-box; }
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 600px;
-         margin: 0 auto; padding: var(--space-4) var(--space-4) var(--tabbar-clearance); color: var(--color-text-primary); background: var(--color-bg-page); }
+         margin: 0 auto;
+         padding: calc(var(--space-4) + env(safe-area-inset-top)) var(--space-4)
+                  calc(var(--tabbar-clearance) + env(safe-area-inset-bottom));
+         color: var(--color-text-primary); background: var(--color-bg-page); }
   /* Extra top clearance so our own header/back button doesn't sit flush
      against whatever's at the very top of the screen (status bar,
      browser chrome, or any OS-level overlay) - real separation we can
@@ -1179,7 +1182,8 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   .date-label { color: var(--color-text-dim); font-size: var(--text-xs); }
 
   #tabbar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--color-bg-card);
-            border-top: 1px solid var(--color-border); display: flex; max-width: 600px; margin: 0 auto; }
+            border-top: 1px solid var(--color-border); display: flex; max-width: 600px; margin: 0 auto;
+            padding-bottom: env(safe-area-inset-bottom); }
   #tabbar button { flex: 1; background: none; border: none; color: var(--color-text-dim); padding: var(--space-3) var(--space-1);
                    font-size: var(--text-sm); display: flex; flex-direction: column; align-items: center; gap: 2px; }
   #tabbar button.active { color: var(--color-accent); }
