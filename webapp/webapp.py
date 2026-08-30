@@ -282,7 +282,14 @@ def api_today():
     lists_today_map = {}
     for a in analyses:
         for mlist in a.get("mentioned_lists", []):
-            name = mlist.get("list_name", "Misc").strip()
+            # Same fix as data_store.py's aggregate_lists(): .get()'s
+            # default only applies when the key is entirely absent, not
+            # when it's explicitly null - `or` catches both cases since
+            # None is falsy either way. This is a separate, independent
+            # copy of that same list-aggregation pattern, living directly
+            # in webapp.py rather than going through data_store - it
+            # needed its own fix, the earlier one never touched this file.
+            name = (mlist.get("list_name") or "Misc").strip()
             if mlist.get("items"):
                 key = name.lower()
                 lists_today_map.setdefault(key, {"list_name": name, "new_item_count": 0})
@@ -1117,6 +1124,11 @@ _PAGE_TEMPLATE = """<!DOCTYPE html>
   * { box-sizing: border-box; }
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; max-width: 600px;
          margin: 0 auto; padding: var(--space-4) var(--space-4) var(--tabbar-clearance); color: var(--color-text-primary); background: var(--color-bg-page); }
+  /* Extra top clearance so our own header/back button doesn't sit flush
+     against whatever's at the very top of the screen (status bar,
+     browser chrome, or any OS-level overlay) - real separation we can
+     control, regardless of what else may be occupying that space. */
+  #header { padding-top: var(--space-3); }
   h1, h2 { color: var(--color-text-primary); }
   h1 { font-size: var(--text-lg); display: flex; justify-content: space-between; align-items: center; }
   #refresh-btn { background: var(--color-accent-strong); color: var(--color-button-text); border: none; border-radius: 6px;
