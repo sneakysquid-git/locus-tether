@@ -1525,21 +1525,12 @@ async function renderToday() {
   // --- Also today: speaking-style feedback + list additions combined
   // into one smaller section (previously two separate always-rendered
   // headers, even when there was often nothing in one or both). ---
-  if (data.speech_coaching.length || data.lists_today.length) {
-    const alsoRows = [
-      ...data.speech_coaching.map(sc => `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
-        <div style="font-weight:600;">🎤 ${esc(sc.title)}</div>
-        <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin:var(--space-1) 0 0;">${esc(sc.overall_take_preview)}</p>
-      </div>`),
-      ...data.lists_today.map(l => `<div class="list-row" onclick="goDetail('lists', '${esc(l.list_name)}')">
-        <div style="display:flex;justify-content:space-between;">
-          <div style="font-weight:600;">${esc(l.list_name)}</div>
-          <div class="date-label">+${l.new_item_count}</div>
-        </div>
-      </div>`),
-    ];
-    html += collapsibleSection('also-today', 'Also today', alsoRows, { defaultOpen: false, truncateAt: 5 });
-  }
+  // "Also today" section removed (speech coaching + list additions) -
+  // speech coaching will get its own aggregate widget under #64, and
+  // list-item assignments ("misc" bucketing especially) aren't proving
+  // useful yet with the amount of real test data gathered so far.
+  // Underlying data/endpoints (Feedback tab, Lists tab) are untouched -
+  // this is a Today-page-rendering-only removal.
 
   // Genuinely nothing logged today — the stats bar above already shows
   // that honestly (all zeros), so this is just a pointer to older
