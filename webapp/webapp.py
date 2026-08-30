@@ -1562,7 +1562,9 @@ async function renderConversationDetail(stem) {
   const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
 
   let html = fromCache ? cacheBannerHtml(timestamp) : '';
-  html += `<h1 style="margin-top:var(--space-2);justify-content:flex-start;gap:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</h1>
+  html += `<h1 style="margin-top:var(--space-2);">
+      <span style="display:inline-flex;align-items:flex-start;gap:var(--space-2);">${categoryIcon(c.category)} ${esc(c.title)}</span>
+    </h1>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2);">
       <div class="date-label">${esc(c.date)} — ${c.start_time ? esc(c.start_time) + ' to ' + esc(c.time) : esc(c.time)}</div>
       <div>
