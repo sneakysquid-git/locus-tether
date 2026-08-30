@@ -1390,6 +1390,51 @@ function setHeader(title, showRefresh, showBack) {
     ? 'Last refreshed: ' + new Date().toLocaleTimeString() : '';
 }
 
+// Reusable collapsible section for the Today page (#63) - each section
+// gets a tappable header showing its item count, collapsed or expanded
+// by default per the caller, plus truncation of the items themselves so
+// even an expanded section doesn't dump 50+ rows at once. itemsHtml is
+// an array of already-rendered row strings; truncateAt controls how many
+// show before a "Show all N" link appears.
+function collapsibleSection(sectionId, title, itemsHtml, opts) {
+  const { defaultOpen = false, truncateAt = 5 } = opts || {};
+  const count = itemsHtml.length;
+  const truncated = itemsHtml.slice(0, truncateAt);
+  const rest = itemsHtml.slice(truncateAt);
+  const arrow = defaultOpen ? '&#9662;' : '&#9656;';
+  const bodyDisplay = defaultOpen ? '' : 'display:none;';
+  const restId = `${sectionId}-rest`;
+
+  let html = `
+    <h2 style="font-size:var(--text-md);margin-top:var(--space-5);cursor:pointer;display:flex;align-items:center;gap:var(--space-2);"
+        onclick="toggleSection('${sectionId}')">
+      <span id="${sectionId}-arrow">${arrow}</span> ${esc(title)}
+      <span style="font-size:var(--text-sm);color:var(--color-text-muted);font-weight:400;">(${count})</span>
+    </h2>
+    <div id="${sectionId}-body" style="${bodyDisplay}">
+      ${truncated.join('')}`;
+
+  if (rest.length) {
+    html += `
+      <div id="${restId}" style="display:none;">${rest.join('')}</div>
+      <p class="show-more-link" style="color:var(--color-accent);cursor:pointer;padding:var(--space-2) 0;"
+         onclick="document.getElementById('${restId}').style.display='block'; this.style.display='none';">
+        Show all ${count}
+      </p>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+function toggleSection(sectionId) {
+  const body = document.getElementById(`${sectionId}-body`);
+  const arrow = document.getElementById(`${sectionId}-arrow`);
+  const isOpen = body.style.display !== 'none';
+  body.style.display = isOpen ? 'none' : '';
+  arrow.innerHTML = isOpen ? '&#9656;' : '&#9662;';
+}
+
 async function renderToday() {
   setHeader('', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
@@ -1448,54 +1493,52 @@ async function renderToday() {
   // extra section header of their own. ---
   const allTodos = [...data.due_soon.map(i => ({...i, isDueSoon: true})), ...data.action_items];
   if (allTodos.length) {
-    html += '<h2 style="font-size:var(--text-md);">To-Dos today</h2>';
-    allTodos.forEach(item => {
+    const todoRows = allTodos.map(item => {
       const borderStyle = item.isDueSoon ? 'border-left:3px solid var(--color-warning);padding-left:var(--space-2);' : '';
       const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
-      html += `<div class="todo-row" style="${borderStyle}" data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
+      return `<div class="todo-row" style="${borderStyle}" data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
           onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
         <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}
         <span class="source-label"> — ${esc(item.source_title)}</span></span>
       </div>`;
     });
+    html += collapsibleSection('todos-today', 'To-Dos today', todoRows, { defaultOpen: true, truncateAt: 8 });
   }
 
   // --- Today's conversations: each row now carries its own key fact
   // preview inline (previously a separate global "Key facts" section). ---
   if (data.conversations.length) {
-    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Conversations today</h2>';
-    data.conversations.forEach(c => {
+    const convoRows = data.conversations.map(c => {
       const color = CATEGORY_COLORS[c.category] || CATEGORY_COLORS.other;
       const factHtml = c.key_fact_preview
         ? `<div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-top:var(--space-1);">${esc(c.key_fact_preview)}</div>` : '';
-      html += `<div class="list-row" style="padding:var(--space-2) var(--space-3);" onclick="goDetail('conversations', '${esc(c.stem)}')">
+      return `<div class="list-row" style="padding:var(--space-2) var(--space-3);" onclick="goDetail('conversations', '${esc(c.stem)}')">
         <span style="font-weight:600;">${categoryIcon(c.category)} ${esc(c.title)}</span>
         <span class="badge" style="background:${color};margin-left:var(--space-2);">${esc(c.category)}</span>
         ${factHtml}
       </div>`;
     });
+    html += collapsibleSection('conversations-today', 'Conversations today', convoRows, { defaultOpen: false, truncateAt: 5 });
   }
 
   // --- Also today: speaking-style feedback + list additions combined
   // into one smaller section (previously two separate always-rendered
   // headers, even when there was often nothing in one or both). ---
   if (data.speech_coaching.length || data.lists_today.length) {
-    html += '<h2 style="font-size:var(--text-md);margin-top:var(--space-5);">Also today</h2>';
-    data.speech_coaching.forEach(sc => {
-      html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
+    const alsoRows = [
+      ...data.speech_coaching.map(sc => `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
         <div style="font-weight:600;">🎤 ${esc(sc.title)}</div>
         <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin:var(--space-1) 0 0;">${esc(sc.overall_take_preview)}</p>
-      </div>`;
-    });
-    data.lists_today.forEach(l => {
-      html += `<div class="list-row" onclick="goDetail('lists', '${esc(l.list_name)}')">
+      </div>`),
+      ...data.lists_today.map(l => `<div class="list-row" onclick="goDetail('lists', '${esc(l.list_name)}')">
         <div style="display:flex;justify-content:space-between;">
           <div style="font-weight:600;">${esc(l.list_name)}</div>
           <div class="date-label">+${l.new_item_count}</div>
         </div>
-      </div>`;
-    });
+      </div>`),
+    ];
+    html += collapsibleSection('also-today', 'Also today', alsoRows, { defaultOpen: false, truncateAt: 5 });
   }
 
   // Genuinely nothing logged today — the stats bar above already shows
