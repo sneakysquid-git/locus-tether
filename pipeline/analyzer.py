@@ -36,6 +36,29 @@ _PLACEHOLDER_NON_DECISION_PHRASES = {
     "no decision was reached",
 }
 
+# #69: below this word count, a transcript is treated as noise/silence
+# rather than a real conversation — VAD can trigger a save (something
+# crossed the speech threshold) while faster-whisper then transcribes
+# little or nothing intelligible from it (a stray sound, a trailing
+# half-word, or speech quiet/whispered enough that transcription can't
+# resolve real words). Confirmed real via a whispered conversation that
+# got fully analyzed and shown as an "Empty Transcript" conversation in
+# the UI — the model handled it honestly per the empty-transcript prompt
+# rule, but nothing upstream of that decided it shouldn't become a
+# conversation entry at all.
+MIN_WORDS_FOR_ANALYSIS = 4
+
+
+def _is_trivial_transcript(transcript_text: str) -> bool:
+    """
+    True when there's essentially nothing here to analyze. Strips the
+    optional "[This conversation had N distinct speakers.]" note that
+    transcribe.build_analysis_text() prepends before counting, so that
+    note's own handful of words never mask an otherwise-empty transcript.
+    """
+    stripped = re.sub(r"^\[.*?\]\s*", "", transcript_text.strip())
+    return len(stripped.split()) < MIN_WORDS_FOR_ANALYSIS
+
 
 def _is_placeholder_non_decision(text: str) -> bool:
     normalized = text.strip().lower().rstrip(".")
@@ -171,7 +194,20 @@ def analyze_and_write(transcript_text: str, stem: str) -> None:
     alongside the existing `<stem>.json` / `<stem>.txt` transcript files.
     Logs and returns quietly on failure — does not raise — since this is
     always called as a best-effort step after a transcript already exists.
+
+    #69: Also returns quietly (no LLM call made, no file written) when the
+    transcript itself is trivial — see _is_trivial_transcript(). The raw
+    transcript/audio stay on disk and archive normally either way; this
+    only decides whether it gets promoted into a full "conversation" shown
+    in the UI.
     """
+    if _is_trivial_transcript(transcript_text):
+        log.info(
+            "Skipping analysis for %s: transcript has essentially no content (< %d words)",
+            stem, MIN_WORDS_FOR_ANALYSIS,
+        )
+        return
+
     try:
         result = analyze_transcript(transcript_text)
     except RuntimeError as e:
