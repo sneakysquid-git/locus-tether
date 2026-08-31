@@ -26,6 +26,8 @@ Tether:
 - [Directory layout on the Thor](#directory-layout-on-the-thor)
 - [Prerequisites](#prerequisites)
 - [Setup on the Thor](#setup-on-the-thor)
+- [Setup: omi_capture (phone-side capture app)](#setup-omi_capture-phone-side-capture-app)
+- [Setup: LocusTether wrapper app (daily-use client)](#setup-locustether-wrapper-app-daily-use-client)
 - [Using the webapp](#using-the-webapp)
 - [Key terms and technologies used here](#key-terms-and-technologies-used-here)
 - [Support this project](#support-this-project)
@@ -40,19 +42,22 @@ Tether:
 ## What this project is
 
 **LocusTether** is a self-hosted replacement for the Omi wearable's normal
-cloud pipeline. Omi's official app streams your audio to Omi's servers,
+cloud pipeline — end to end, not just the processing step. Omi's official
+setup streams your audio through Omi's own phone app to Omi's servers,
 where a cloud LLM turns it into summaries, to-do lists, and searchable
-notes. LocusTether gets the same *value* — automatic transcription,
-structured summaries, speaking-style coaching, and an always-current
-dashboard of your conversations — without any of that audio or text ever
-leaving your own hardware.
+notes. LocusTether replaces every piece of that: a custom phone app
+captures audio directly from the hardware, a self-hosted pipeline
+transcribes and summarizes it, and either a thin native wrapper or any
+browser gives you access to the result — without any of that audio or
+text ever leaving your own hardware, and without Omi's own app or backend
+in the loop anywhere.
 
-Everything runs on a single NVIDIA Jetson Thor: the speech-to-text model,
-the language model that summarizes it, and the code that ties it all
-together. No cloud API calls, no third-party servers, nothing billed
-per-request. Remote access (the web dashboard, SSH) goes over Tailscale — a
-private encrypted mesh network between your own devices, never the public
-internet.
+Everything that actually processes your data runs on a single NVIDIA
+Jetson Thor: the speech-to-text model, the language model that summarizes
+it, and the code that ties it all together. No cloud API calls, no
+third-party servers, nothing billed per-request. Remote access (the web
+dashboard, SSH) goes over Tailscale — a private encrypted mesh network
+between your own devices, never the public internet.
 
 **Original project:** [`gl-demo-ultimate-efranklin/thor-training`](https://gitlab.com/gl-demo-ultimate-efranklin/thor-training)
 — if you've forked this for your own hardware, your own issue tracker will
@@ -107,7 +112,10 @@ thing:
 concretely, not just "different":**
 - **Genuinely zero cloud service dependencies** — not just relocated
   compute like Omi's own "self-hosted" mode, actually nothing phoning home
-  after initial model downloads
+  after initial model downloads. This now extends all the way to phone-side
+  capture too: `omi_capture` (see below) talks to the Omi hardware directly
+  over BLE, replacing Omi's own app entirely rather than just intercepting
+  what it sends.
 - **Speaker diarization with real voice recognition** — not just "4
   distinct speakers," but matching a specific enrolled voice by name
   across different recordings, confirmed working on real hardware
@@ -128,15 +136,18 @@ concretely, not just "different":**
 
 So: the underlying *technique* here is well-trodden ground. What doesn't
 appear to already exist, as far as this research found, is the specific
-combination LocusTether targets — zero cloud dependencies, works from any
-Android phone to whatever host hardware you have, plus a genuinely fuller
-productivity and analysis layer built on top.
+combination LocusTether targets — zero cloud dependencies from the
+hardware all the way through, works from any Android phone to whatever
+host hardware you have, plus a genuinely fuller productivity and analysis
+layer built on top.
 
 ## System architecture (how it actually runs)
 
 ```mermaid
 flowchart TB
     Omi(["Omi wearable"])
+    Capture["omi_capture (phone app)<br/>BLE · Silero VAD<br/>Opus decode · force-record"]
+    Recordings[("Phone: /Recordings")]
     Sync[["Syncthing"]]
 
     subgraph Thor["Jetson Thor"]
@@ -159,51 +170,49 @@ flowchart TB
     end
 
     EmailInbox[("Email inbox")]
-    You(["You — phone or browser, anywhere"])
+    Wrapper["LocusTether wrapper app<br/>(Capacitor, phone)"]
+    You(["You — anywhere"])
 
-    Omi -.->|"blocked — no hardware yet"| Sync
-    Sync -->|"proven — manual test folder"| Inbox
+    Omi -->|BLE| Capture
+    Capture --> Recordings
+    Recordings --> Sync
+    Sync --> Inbox
     Digest -->|SMTP| EmailInbox
-    Webapp <-->|"tailscale serve"| You
+    Webapp <-->|"tailscale serve"| Wrapper
+    You --> Wrapper
+    You -.->|"or: any browser"| Webapp
 
     classDef done fill:#1b4332,stroke:#0d2818,color:#ffffff,stroke-width:2px
-    classDef planned fill:#1d3557,stroke:#0d1b2a,color:#ffffff,stroke-width:2px
     classDef extern fill:#495057,stroke:#212529,color:#ffffff,stroke-width:2px
 
-    class Omi planned
-    class Sync,Inbox,Transcribe,Transcripts,Analysis,Digest,Webapp,TodoState done
+    class Omi,Capture,Recordings,Sync,Inbox,Transcribe,Transcripts,Analysis,Digest,Webapp,TodoState,Wrapper done
     class You,EmailInbox extern
 
     style Thor fill:#30363d,stroke:#8b949e,color:#ffffff,stroke-width:1px
 ```
 
 🟢 **Dark green: built, tested, working end-to-end** on real hardware with
-real recordings — including getting past several hardware-specific bugs
-unique to being early adopters of very new NVIDIA silicon (see the
-phase-by-phase notes below). This now explicitly includes **Syncthing
-itself** — the sync mechanism has been verified working, reliably moving
-files into the Thor's `inbox/` automatically with no manual action. What's
-still blocked is specifically the **Omi wearable side**: pointing that
-already-proven mechanism at wherever the Omi app actually writes its
-recordings, since the hardware hasn't shipped yet.
-
-🔵 **Dark blue: designed and documented, blocked on hardware** — just the
-Omi wearable node now, not Syncthing itself. Everything downstream has been
-validated using manually-recorded test audio dropped straight into a
-watched folder, standing in for what the Omi app will eventually write to
-automatically once Syncthing is pointed at the right location.
+real recordings and real daily use — including getting past several
+hardware-specific bugs unique to being early adopters of very new NVIDIA
+silicon (see the phase-by-phase notes below), and a genuine phone-side BLE
+capture app (`omi_capture`) confirmed working against the actual Omi Dev
+Kit 2. Nothing in this diagram is currently blocked or unimplemented.
 
 Two things worth calling out about this design:
 
 - **Nothing in this diagram is triggered manually except the "You" node.**
-  Syncthing reacts to filesystem events (not a schedule), the watcher reacts
-  to new files instantly, and the digest fires on a daily timer. The webapp's
-  refresh button is the *only* on-demand action anywhere in the system — it
-  doesn't send anything anywhere, it just asks "what do you currently have."
+  `omi_capture` reacts to speech (via real VAD, not a schedule), Syncthing
+  reacts to filesystem events, the watcher reacts to new files instantly,
+  and the digest fires on a daily timer. The webapp's refresh button is
+  the *only* on-demand action anywhere in the system — it doesn't send
+  anything anywhere, it just asks "what do you currently have."
 - **The webapp is reachable from anywhere without exposing anything
   publicly.** `webapp.py` binds to `127.0.0.1` only; `tailscale serve` makes
   it reachable over your private Tailscale network (the same one SSH
-  already uses), with real HTTPS, and zero public internet exposure.
+  already uses), with real HTTPS, and zero public internet exposure. The
+  wrapper app is just a convenience shell around that same URL — using it
+  is optional; a plain browser pointed at the same `tailscale serve`
+  address works identically.
 
 ## Known limitations — read this before you rely on it
 
@@ -218,33 +227,43 @@ by how much it should actually worry you.
   prompt fix plus an automated filter now catch the specific pattern we've
   actually seen, but this is a small-model limitation, not something fully
   eliminated — spot-check anything that looks suspiciously specific.
-- **`participants`/`owner` attribution is inconsistent run to run.** The
-  same recording, processed twice, has shown a real named participant
-  correctly picked up once and dropped the next time. Not fully understood
-  yet, watched but not chased down (see #46).
 - **Speaker diarization accuracy hasn't been rigorously measured.** It
   clearly works — confirmed on real multi-speaker recordings, confirmed
   matching a specific enrolled voice correctly across different recordings
   — but "does it get every hand-off exactly right" has only been checked
   by ear, not measured at scale.
-- **Voice enrollment/matching needed real dependency debugging to get
-  working** (three separate rounds: a silent CPU-only torch fallback, a
-  renamed constructor parameter, a torch/torchaudio/torchvision version
-  mismatch — see Phase 3 below). It works now, on this hardware, but the
-  underlying embeddings API surface is genuinely finicky.
+- **Very quiet or whispered speech often doesn't transcribe reliably.**
+  Real VAD can correctly detect that speech happened while faster-whisper
+  still comes back with little or nothing intelligible — likely an
+  intrinsic limitation of how Whisper-family models handle whispered
+  audio, not something straightforwardly fixable. A near-empty result like
+  this is now at least caught and skipped before it becomes a cluttering
+  "Empty Transcript" conversation entry, but the underlying transcription
+  gap itself remains.
+- **Merged-conversation detection is new and unproven.** A separate check
+  now flags when a single recording might actually be multiple unrelated
+  conversations merged together (surfaced as a warning banner in a
+  conversation's detail view), but nothing auto-splits yet, and its real
+  false-positive/false-negative rate hasn't been established — treat its
+  warnings skeptically until it's seen more real-world use.
 
 **Real, unresolved gaps:**
-- **Phase 0/1 (finding where Omi stores recordings, and syncing them
-  automatically) are blocked** — this whole pipeline has been built and
-  tested using manually-transferred test recordings, not a real Omi
-  device, because the hardware hadn't arrived yet. The mechanism for
-  Phase 1 (Syncthing over Tailscale) is proven working for a generic
-  folder; pointing it at wherever Omi actually stores audio, and
-  confirming Phase 0's assumptions about that path, is still untested.
-- **No automated tests.** Everything here has been verified through real
-  manual testing (often on real hardware, with real recordings) at the
-  time it was built, but there's no regression suite catching a future
-  change quietly breaking something already working.
+- **Real VAD can't tell whose voice it is.** `omi_capture`'s Silero VAD
+  correctly detects that speech occurred, but not whether it's actually
+  *you* speaking versus ambient conversation nearby — an other-people
+  conversation gets captured and processed the same as a real one. Only
+  diarization after the fact can answer "whose voice," and nothing
+  currently filters on it at capture time.
+- **The same action item can get extracted more than once** across
+  separate conversations, with no deduplication yet.
+- **No automatic BLE reconnect** if the connection to the Omi drops
+  mid-day — `omi_capture` needs a manual restart to resume listening.
+- **Full multi-hour/full-day battery and reliability behavior is still
+  genuinely untested** past short sessions.
+- **Test coverage is real but partial.** `tests/` and CI (`.gitlab-ci.yml`)
+  now cover several modules (analyzer, digest preferences, manual to-dos,
+  speech metrics, UI preferences), but not the whole codebase — a passing
+  CI run doesn't mean everything was exercised.
 - **Only tested on one specific piece of hardware** — see the dedicated
   hardware section below.
 
@@ -256,6 +275,11 @@ unified memory, `sm_110` GPU architecture). That hardware was new enough,
 at the time, that basic pieces (a working CUDA-accelerated CTranslate2
 build) didn't exist prebuilt anywhere and needed real from-source
 debugging to get working at all.
+
+On the phone side, everything has been built and tested against **one
+specific phone**: a Pixel 10 Pro XL running Android. `omi_capture` and the
+LocusTether wrapper app are both Android-only — no iOS build has been
+attempted for either.
 
 **What this means for you, concretely:**
 - If you're on a different Jetson model, a desktop PC with an NVIDIA GPU,
@@ -279,50 +303,66 @@ debugging to get working at all.
   along the way — read them if something breaks, since the actual failure
   and fix for a *previous* hardware-specific bug is probably already
   written down right next to the code it affects.
+- On a different Android phone, `omi_capture`'s BLE scan/connect logic
+  should behave the same (it's a direct GATT connection to the Omi's own
+  advertised UUIDs, not phone-specific), but foreground-service behavior
+  around battery optimization varies meaningfully across Android OEMs —
+  Samsung and other heavily-customized Android skins are known, in
+  general, to be more aggressive about killing background services than
+  stock/Pixel Android is.
 
 ## Phase-by-phase: what each step is trying to accomplish
 
-### Phase 0 — Find where the phone actually stores recordings
-**Goal:** confirm exactly where the Omi app writes raw audio files on the
-phone, and in what format. **Status: blocked on hardware.** `adb`
-investigation plan is documented and ready to run the moment the wearable
-arrives.
+### Phase 0/1 — Getting audio off the Omi and onto the Thor
+**Goal:** capture raw audio from the Omi wearable and land it in the
+Thor's `inbox/` automatically, with zero manual action anywhere in the
+chain. **Status: done.**
 
-### Phase 1 — Get audio from the phone to the Thor, automatically
-**Goal:** zero manual action, ever — audio should sync itself the moment
-both devices share a network. **Status: mechanism proven, blocked on
-hardware for the Omi-specific path.** Syncthing (one-directional
-Send-Only/Receive-Only pairing) is fully designed AND verified working —
-confirmed reliably moving files into the Thor's `inbox/` automatically,
-zero manual action, using a manual test folder standing in for wherever
-the Omi app will eventually write. What's still blocked is pointing that
-proven mechanism at the real Omi recording location, since the hardware
-hasn't shipped yet. Worth noting: Syncthing is event-driven, not
-scheduled — there's no "cadence" to configure, it reacts to new files
-continuously. Extending this over Tailscale (so sync works from anywhere,
-not just home Wi-Fi) is a natural next step.
+The original plan was to let Omi's own official app write recordings to
+phone storage and have Syncthing pick them up from wherever that turned
+out to be. Once the hardware actually arrived, that plan changed: Omi's
+official app was replaced entirely with **`omi_capture`**, a purpose-built
+Flutter app (full setup below) that talks directly to the Omi hardware
+over BLE, decodes its Opus-encoded audio in real time, runs a real Silero
+VAD model to detect actual speech (not just volume), and writes segmented
+WAV files straight to phone storage — no cloud round-trip, and no
+dependency on Omi's own app or backend at any point.
 
-**Will this work on iOS? Genuinely uncertain — here's the honest plan.**
-Syncthing has no official iOS app (a deliberate choice by its own
-developers), but real third-party clients exist and work: Möbius Sync
-(the longest-standing option), Synctrain, and Sync Anything. The actual
-uncertainty isn't "does Syncthing run on iOS" — it does — it's whether
-*this specific use case* works: syncing a folder that belongs to a
-*different* app (Omi's own recording storage), not a folder the Syncthing
-client owns itself. iOS's sandboxing model is much stricter than
-Android's here, and Möbius Sync's own documentation describes accessing
-another app's private storage as an experimental, paid feature that "may
-break other app's functionality" — not a confident yes. Drafted plan for
-whoever tests this first, since this project hasn't:
-1. Confirm where the Omi iOS app actually stores recordings, and whether
-   it offers any built-in export/share path (Files app, iCloud Drive)
-   rather than needing direct sandbox access at all.
-2. If direct sandbox access is genuinely required, try Möbius Sync's
-   experimental cross-app folder feature against that specific location.
-3. If that doesn't work reliably, the fallback is almost certainly routing
-   through whatever official export mechanism Omi's iOS app provides
-   (e.g. a Files-app-visible folder) rather than fighting iOS's sandboxing
-   directly — slower than Android's fully automatic path, but functional.
+Real findings from getting this working on actual hardware:
+- The Omi Dev Kit 2's firmware reports codec byte `21` for Opus, not `20`
+  as the reference fork (`my-omi`, below) assumed — confirmed directly
+  against this specific device.
+- BLE/Opus/UUID logic was ported from
+  [`unforced/my-omi`](https://github.com/unforced/my-omi), a small (and by
+  now fairly stale — no real commits since ~December 2024) minimal Omi
+  fork, cloned locally purely as reference material, not a live
+  dependency. Everything else — the foreground service, VAD integration,
+  force-record mode — was built fresh for `omi_capture`.
+- A crude RMS/volume threshold was tried first for speech detection and
+  abandoned after real testing showed it couldn't distinguish a muffled,
+  quiet voice from an unrelated voice across the room — both landed in the
+  same energy range. Replaced with real Silero VAD, which judges the
+  acoustic shape of speech rather than just loudness. (Note this only
+  solves speech-vs-silence — telling *whose* voice it is is a separate,
+  still-open problem; see Known Limitations.)
+- Flutter's foreground-service isolate doesn't share initialization state
+  with the main UI isolate — both Opus and the VAD model needed their own
+  explicit re-initialization *inside* the service's own isolate, or they
+  silently failed with no error reaching the main log stream at all.
+- A **force-record mode** (fixed-duration recording that bypasses VAD
+  entirely) was added for situations like attending a presentation without
+  speaking — files save with a `-forced` filename suffix so a future
+  ambient-speaker filter can treat them differently.
+
+Getting the resulting recordings from the phone onto the Thor is
+unchanged from the original plan: Syncthing, one-directional
+Send-Only/Receive-Only pairing, just watching `omi_capture`'s own output
+folder instead of wherever Omi's own app used to write. Verified working,
+zero manual action, event-driven rather than scheduled.
+
+**iOS: not attempted.** Both `omi_capture` and the wrapper app are
+Android-only; a genuine iOS build would need its own separate native or
+Flutter effort.
 
 ### Phase 2 — Notice new audio and hand it off for processing
 **Goal:** a background process that's always watching, robust to
@@ -398,6 +438,16 @@ empty list when nothing applies" rule enforced in code rather than relying
 on prompt wording alone, after the model persistently padded them with
 placeholder entries regardless of instructions.
 
+Two further refinements came out of real daily use once the pipeline had
+real family conversations running through it regularly: a check that
+skips analysis entirely for near-empty/trivial transcripts (previously, a
+whispered conversation VAD picked up but Whisper couldn't meaningfully
+transcribe would still get fully analyzed and shown as a real "Empty
+Transcript" conversation), and a separate, best-effort detection pass that
+flags when a single recording might actually be multiple genuinely
+unrelated conversations merged together — surfaced as a warning in the
+webapp, not yet auto-split (see Known Limitations for both).
+
 ### Phase 5 — Surface it without having to go looking
 **Goal:** a daily digest that's actually pleasant to read, not just a data
 dump. **Status: done**, and grew well beyond the original scope:
@@ -435,10 +485,10 @@ email fundamentally can't do: **real, functioning checkboxes** that
 actually persist. **Status: done.** `webapp.py` (Flask) + `todo_state.py`
 (a small persisted overlay tracking which to-dos are checked off, kept
 separate from the read-only LLM output) + `tailscale serve` for remote
-access without any public exposure. Deliberately lightweight — this only
-reads existing JSON files off disk, no GPU/LLM work, negligible resource
-cost at rest, safe to run continuously alongside robotics work on the same
-device.
+access without any public exposure, either directly or via the LocusTether
+wrapper app. Deliberately lightweight — this only reads existing JSON
+files off disk, no GPU/LLM work, negligible resource cost at rest, safe to
+run continuously alongside robotics work on the same device.
 
 ## Directory layout on the Thor
 
@@ -462,6 +512,9 @@ device.
 │       ├── speech_coach/              <- Phase 6: on-demand speaking-style coaching
 │       │   ├── speech_metrics.py     <- free deterministic metrics
 │       │   └── speech_coach.py
+│       ├── mobile-app/                <- LocusTether wrapper app (Capacitor, Node) - daily-use client
+│       ├── omi_capture/               <- phone-side BLE/VAD capture app (Flutter, Dart) - replaces Omi's own app
+│       ├── tests/                     <- automated tests (pytest), run via .gitlab-ci.yml
 │       ├── systemd/                   <- all .service / .timer unit files
 │       │   ├── omi-watcher.service
 │       │   ├── webapp.service
@@ -477,13 +530,15 @@ device.
 │       │   └── analyze.py            <- manual CLI for testing prompt changes
 │       ├── requirements.txt           <- host-side (webapp/digest) deps
 │       ├── LICENSE
+│       ├── DEVELOPMENT_HISTORY.md     <- the real story behind every fight documented in this README
 │       ├── .dockerignore / .gitignore
+│       ├── .gitlab-ci.yml             <- CI: runs tests/ automatically
 │       ├── .env                       <- created locally, not tracked
 │       ├── .env.digest.example        <- tracked template, no real secrets
 │       └── .env.digest                <- created locally, not tracked (SMTP creds)
 │
 └── omi-data/                          <- DATA (not part of this repo, not in git)
-    ├── inbox/                         <- Syncthing will drop files here (Phase 1)
+    ├── inbox/                         <- Syncthing drops files here (Phase 1)
     ├── processing/
     ├── archive/
     ├── transcripts/                   <- *.json, *.analysis.json, *.speech_coach.json
@@ -498,6 +553,14 @@ other three (`webapp/`, `digest/`, `speech_coach/`) each add `pipeline/` to
 their own `sys.path` at runtime rather than needing Python package/import
 gymnastics. This is a one-directional dependency: `pipeline/` never imports
 from any of the others.
+
+`mobile-app/` and `omi_capture/` are genuinely separate applications —
+different languages and toolchains entirely (Node/Capacitor and
+Dart/Flutter, respectively) — bundled into this same repo for
+single-source-of-truth convenience. Neither is imported by, or a runtime
+dependency of, anything in `pipeline/`, `webapp/`, `digest/`, or
+`speech_coach/`; they're client-side apps that talk to the webapp over
+HTTP, nothing more.
 
 ## Prerequisites
 
@@ -528,6 +591,11 @@ sudo tailscale up
 That last command prints a URL — since a headless Thor has no browser,
 open that URL on your phone or laptop to authenticate this device into
 your Tailscale account.
+
+Phone-side prerequisites (Flutter, Node/npm, an Android phone with USB
+debugging enabled) are covered in their own setup sections below, since
+they're only needed if you're building `omi_capture` or the wrapper app
+yourself rather than just running the Thor-side pipeline.
 
 ## Setup on the Thor
 
@@ -585,7 +653,14 @@ silently resolves to blank, and the container ends up bind-mounted to
 filesystem root (`/inbox`, `/transcripts`, etc.) instead of your real data
 directory. It'll still start and report "Up" with no obvious error — the
 only visible sign is a `WARN... variable is not set` line easy to miss or
-assume is harmless.
+assume is harmless. To deploy a code change to anything in `pipeline/`
+later, use the full down/up cycle, not a bare restart:
+```bash
+docker compose --env-file .env -f docker/docker-compose.yml down
+docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+```
+`docker compose restart` does **not** rebuild the image, so it won't pick
+up a code change — it'll just restart the container running the old code.
 
 **Host-side dependencies** (webapp + digest, not containerized):
 ```bash
@@ -617,6 +692,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now webapp
 sudo tailscale serve --bg https / http://127.0.0.1:5001
 ```
+The webapp runs as this separate, host-level systemd service — **not**
+inside Docker, unlike the transcription/analysis pipeline above. A code
+change to anything in `webapp/` needs `sudo systemctl restart webapp`
+specifically; rebuilding the Docker container does nothing for it, and
+vice versa. These are two entirely independent deploy steps.
 
 **Persistent watcher (bare-metal alternative to Docker)**:
 ```bash
@@ -637,10 +717,105 @@ manager) instances, not system-wide ones. Find-and-replace
 `<your-username>` with your actual username in each file before installing
 it — every path in these files needs that one substitution.
 
+## Setup: omi_capture (phone-side capture app)
+
+Replaces Omi's own official app entirely — this is what actually talks to
+the Omi hardware over BLE and gets audio onto your phone in the first
+place. Android only; confirmed working on a Pixel 10 Pro XL. Lives in
+`omi_capture/` in this repo.
+
+**Install Flutter**, if you don't already have it — see
+[docs.flutter.dev/get-started/install](https://docs.flutter.dev/get-started/install)
+for your OS, then confirm the toolchain:
+```bash
+flutter doctor   # confirm the Android toolchain is detected
+```
+
+**Build and install onto a connected phone:**
+```bash
+cd ~/projects/thor-training/omi_capture
+flutter pub get
+flutter devices    # confirm your phone is detected over USB
+                    # (enable Developer Options -> USB debugging first)
+flutter run         # builds and installs directly onto the connected phone
+```
+
+**Permissions the app requests on first launch** — grant all of these,
+capture won't work correctly without them:
+- **Bluetooth** (scan + connect) — talking to the Omi hardware itself
+- **Notifications** — required just to show the foreground service's
+  persistent "listening" notification (Android 13+)
+- **Storage** (manage/read/write external storage) — writing segmented
+  recordings to the phone
+- **Battery optimization exemption** — without this, Android can still
+  kill the background service over time even with the notification
+  showing
+
+**Pairing with your Omi device:** power on the Omi, open the app — it
+scans for up to 15 seconds looking for a BLE advertisement matching the
+Omi's known service UUID, connects automatically once found, reads the
+audio-codec characteristic to confirm Opus, and starts listening. There's
+no separate manual pairing step in Android's own Bluetooth settings — this
+is a direct BLE GATT connection, not classic Bluetooth pairing.
+
+**Force-record mode:** tap "Force Record..." while listening to start a
+fixed-duration recording that ignores VAD/silence-gap entirely — useful
+for something like a presentation you're attending but not speaking in.
+Files save with a `-forced` filename suffix.
+
+**Where recordings land:** `/storage/emulated/0/Recordings` on the phone.
+This is the folder Syncthing needs to be pointed at (Send-Only on the
+phone, Receive-Only on the Thor) so recordings reach the Thor's `inbox/`
+automatically — just point Syncthing's phone-side send folder here instead
+of wherever Omi's own app used to write.
+
+**Known limitation:** no automatic BLE reconnect if the connection drops
+mid-day — currently needs a manual restart of the app. See Known
+Limitations above.
+
+## Setup: LocusTether wrapper app (daily-use client)
+
+A thin Capacitor shell that just displays the self-hosted webapp inside a
+WebView — this is what you'd actually open day to day, rather than typing
+a Tailscale URL into a browser every time. Its own native logic is
+genuinely minimal: enter a server URL once, and it loads that URL
+full-screen from then on. Android only. Lives in `mobile-app/` in this
+repo.
+
+**Install Node.js**, if you don't already have it, then install
+dependencies:
+```bash
+cd ~/projects/thor-training/mobile-app
+npm install
+```
+
+**Build and install onto a connected phone:**
+```bash
+npx cap sync android
+npx cap open android    # opens Android Studio — build/run from there
+                          # onto a connected device
+```
+
+**On first launch**, you'll be prompted for a server URL — enter your
+Thor's `tailscale serve` address (the same one you'd otherwise type into a
+browser, e.g. `https://your-device.your-tailnet.ts.net`). It's saved via
+Capacitor's Preferences plugin, so you only enter it once. A small link
+icon (top-right, deliberately positioned away from the webapp's own bottom
+tab bar and its own separate Settings gear, to avoid the two colliding)
+lets you change or reconnect to a different server later.
+
+**Note for anyone customizing this further:** `env(safe-area-inset-*)`
+doesn't reliably propagate into the nested iframe/WebView the webapp
+renders in — the inset is applied at this wrapper's own outer, top-level
+document instead, not inside the webapp's own CSS. Worth knowing before
+"fixing" what looks like a webapp-side layout bug that's actually a
+wrapper-side one.
+
 ## Using the webapp
 
 Once running (`tailscale serve` gives you a URL reachable from any device
-on your tailnet), five tabs across the bottom:
+on your tailnet, or open the wrapper app if you've installed it), five tabs
+across the bottom:
 
 - **Today** — a daily at-a-glance view: a stats summary (conversations,
   people, to-dos, and a speaking-pace trend if coaching's run), today's
@@ -651,7 +826,9 @@ on your tailnet), five tabs across the bottom:
   and Delete buttons on each — correct anything the AI got wrong directly,
   or archive a conversation out of your active views (the underlying
   recording and transcript stay fully intact on disk either way, this
-  only affects what shows in the app).
+  only affects what shows in the app). A warning banner appears here if
+  the recording might actually be multiple unrelated conversations merged
+  together — see Known Limitations.
 - **To-Dos** — every open action item across all history, whether
   extracted from a conversation or added manually right here. A "Today
   only" filter toggle, and an input at the top to add a to-do directly —
@@ -682,15 +859,54 @@ Reachable via the gear icon (top-right of Today/most tabs):
 
 **Omi** — the open-source AI wearable this project is built around (MIT
 licensed). Normally pairs with a phone app that streams audio to Omi's
-cloud for processing; here we intercept before that cloud step.
+cloud for processing; here, `omi_capture` replaces that phone app entirely.
+
+**BLE (Bluetooth Low Energy) / GATT** — the wireless protocol the Omi
+hardware uses to stream audio. GATT (Generic Attribute Profile) is the
+data model BLE devices expose — "services" and "characteristics" —
+that `omi_capture` reads directly, rather than going through classic
+Bluetooth pairing.
+
+**Opus** — the audio codec the Omi hardware encodes its microphone data as
+before sending it over BLE. `omi_capture` decodes this in real time via
+`opus_dart`/`opus_flutter`.
+
+**Silero VAD (Voice Activity Detection)** — the real speech-detection
+model `omi_capture` runs on decoded audio, replacing an earlier crude
+volume-threshold approach that couldn't distinguish a quiet voice from an
+unrelated one further away.
+
+**Flutter / Dart isolate** — Dart's unit of concurrent execution; unlike
+threads, isolates don't share memory or initialization state by default.
+`omi_capture`'s foreground service runs in its own isolate, separate from
+the main UI — a real bug hit during development, since initializing Opus
+or the VAD model only in the main UI isolate silently never reached the
+background service at all.
+
+**Force-record** — `omi_capture`'s fixed-duration recording mode that
+bypasses VAD/silence-gap entirely, for situations like attending a
+presentation without speaking. Saved files carry a `-forced` filename
+suffix.
+
+**`my-omi`** — a small, largely inactive open-source Omi fork
+([`unforced/my-omi`](https://github.com/unforced/my-omi)) cloned locally as
+reference material for `omi_capture`'s BLE/Opus/UUID handling. Not a live
+dependency, and not itself actively maintained upstream — its own last
+real commit predates this project.
+
+**Capacitor** — a framework for wrapping a web app in a native mobile
+shell. The LocusTether wrapper app is a thin Capacitor shell around the
+self-hosted webapp; it adds essentially no native code of its own beyond
+server-URL settings.
 
 **Syncthing** — an open-source file-synchronization tool that syncs folders
 directly between devices on the same network, with no cloud server in the
 middle. Event-driven (reacts to file changes instantly), not scheduled.
 
-**Jetson Thor** — the physical NVIDIA computer everything in this project
-runs on. A compact "edge AI" device: a real GPU and 128GB of unified memory,
-built for running AI workloads locally instead of in a data center.
+**Jetson Thor** — the physical NVIDIA computer everything in this project's
+pipeline and webapp runs on. A compact "edge AI" device: a real GPU and
+128GB of unified memory, built for running AI workloads locally instead of
+in a data center.
 
 **CUDA** — NVIDIA's platform for running general-purpose computation on the
 GPU rather than the CPU. Both transcription and analysis depend on it for
@@ -778,10 +994,24 @@ donation.
 
 ## What's next
 
-The real remaining work is tracked in the Known Limitations section above
-and in the GitLab issue tracker — Phase 0/1 (waiting on the Omi wearable to
-actually ship) is the biggest single blocker, everything else is smaller
-and more incremental.
+The real remaining work is tracked in the GitLab issue tracker — #68 is
+the living priorities document, always more current than this section.
+As of this writing, the biggest open items:
+
+- **Real VAD can't identify whose voice it is** — ambient/other-people
+  conversations get captured and processed the same as real ones, since
+  only diarization after the fact can answer "whose voice," not VAD at
+  capture time.
+- **Merged-conversation detection flags a possible split, but nothing
+  auto-splits yet** — the next phase of that work needs each split part
+  to carry its own accurate timing and be independently reprocessable,
+  which the current one-file-per-conversation data model doesn't yet
+  support.
+- **Duplicate action items** can appear across separate conversations
+  with no deduplication.
+
+Everything else is smaller and more incremental — see the issue tracker
+for the full current picture.
 
 ## Glossary
 
@@ -792,6 +1022,8 @@ and technologies" above for the fuller *why* behind the major ones.
   added manually in the webapp.
 - **Analysis** — the structured LLM output for one conversation: title,
   overview, category, key points, decisions, action items, etc.
+- **BLE / GATT** — the Bluetooth protocol and data model `omi_capture`
+  uses to talk to the Omi hardware directly. See Key terms above.
 - **Container** — see Docker, above.
 - **Diarization** — figuring out *who* said *what* in a multi-speaker
   recording — splitting a transcript into per-speaker segments.
@@ -799,13 +1031,19 @@ and technologies" above for the fuller *why* behind the major ones.
   to-dos.
 - **Embedding** — a numeric fingerprint of a voice, used to recognize the
   same speaker across different recordings (see Voice enrollment, below).
+- **Force-record** — `omi_capture`'s mode for recording a fixed duration
+  regardless of detected speech. See Key terms above.
 - **Hallucination** — an LLM generating something plausible-sounding but
   factually wrong or unsupported by the actual source material.
-- **Inbox** — the folder Syncthing (or a manual copy, for testing) drops
-  new recordings into, watched by `watcher.py`.
+- **Inbox** — the folder Syncthing drops new recordings into, watched by
+  `watcher.py`.
+- **Isolate** — Dart's unit of concurrent execution, roughly analogous to
+  a thread but without shared memory. See Key terms above.
 - **Main user** — the enrolled voice marked as "this is me" — speaking-
   style coaching analyzes only their speech in a recording, not everyone
   else's.
+- **Opus** — the audio codec the Omi hardware streams over BLE. See Key
+  terms above.
 - **Pipeline** — the whole chain of processing a recording goes through:
   transcription, diarization, analysis, coaching.
 - **Prompt** — the instructions given to the LLM describing what to
@@ -817,8 +1055,10 @@ and technologies" above for the fuller *why* behind the major ones.
   (e.g. `meeting.m4a`, `meeting.json`, `meeting.analysis.json` all share
   the stem `meeting`).
 - **VAD (Voice Activity Detection)** — automatically identifying which
-  parts of an audio file actually contain speech, so silence isn't wastefully
-  transcribed.
+  parts of an audio file actually contain speech. Used both on the Thor
+  side (via Whisper's own VAD filter) and, more importantly, on the phone
+  itself by `omi_capture`'s real-time Silero VAD model — which detects
+  that speech occurred, but not whose voice it is (see Known Limitations).
 - **Voice enrollment** — recording a short sample of someone's voice so
   future conversations can recognize them by name instead of an anonymous
   speaker label.
