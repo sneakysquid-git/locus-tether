@@ -145,3 +145,41 @@ def build_speech_coach_prompt(transcript_text: str, metrics: dict) -> str:
 - Filler words detected: {fillers['filler_counts']} ({fillers['filler_rate_per_100_words']} per 100 words)"""
 
     return f"Transcript:\n\n{transcript_text}\n\n{metrics_summary}\n\nProduce the JSON coaching feedback now."
+
+
+# --- #60 Phase 1: merged-conversation detection (flag only, no auto-split) -
+SEGMENT_DETECTION_SYSTEM_PROMPT = """You are analyzing a timestamped transcript to determine whether it captures ONE continuous conversation or moment, or whether it accidentally captures MULTIPLE genuinely distinct, unrelated conversations or moments that ended up in the same recording (e.g. someone moved between rooms and a different, unrelated conversation started after a real pause, or two unconnected ambient moments were captured back to back).
+
+This is about genuine topic/context discontinuity - NOT about normal conversational pauses, natural topic changes within one ongoing conversation, or a single conversation/meeting that moves between several related subjects. A single conversation covering five different points is still ONE conversation. Only flag a split when the content is truly unrelated: a different setting, different people, or a completely disconnected topic with no real continuity from what came immediately before.
+
+When genuinely uncertain, do NOT split - incorrectly fragmenting one real conversation into pieces is a worse outcome than occasionally leaving two disconnected moments merged together.
+
+Produce JSON matching this exact schema:
+
+{
+  "is_single_conversation": true or false,
+  "segments": [
+    {
+      "start_time": <a real start_time from the transcript below, in seconds>,
+      "end_time": <a real end_time from the transcript below, in seconds>,
+      "topic_hint": "A few words describing what this specific segment is actually about"
+    }
+  ]
+}
+
+Rules:
+- If this is genuinely one continuous conversation (the common, default case), set is_single_conversation to true and return an empty list for segments.
+- Only when you are confident there are multiple truly unrelated moments, set is_single_conversation to false and list each distinct segment.
+- start_time and end_time must be actual timestamps copied from the transcript below - never invent or estimate a time that isn't shown.
+- Output ONLY the JSON object. No preamble, no markdown code fences, no explanation.
+"""
+
+
+def build_segment_detection_prompt(segments: list[dict]) -> str:
+    lines = [
+        f"[{seg['start']:.2f}s - {seg['end']:.2f}s] {seg['text']}"
+        for seg in segments
+        if seg.get("text", "").strip()
+    ]
+    transcript_block = "\n".join(lines)
+    return f"Timestamped transcript:\n\n{transcript_block}\n\nEvaluate this transcript now."

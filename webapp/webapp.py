@@ -134,6 +134,7 @@ def _full_conversation(a: dict) -> dict:
         "category": a.get("category", "uncategorized"),
         "overview": a.get("overview", ""),
         "atmosphere": a.get("atmosphere"),
+        "possible_distinct_conversations": a.get("possible_distinct_conversations"),
         "speaker_count": data_store.get_speaker_count(stem),
         "participants": [p for p in a.get("participants", []) if p.get("name")],
         # "topics" is the current schema (a structured breakdown by
@@ -1252,6 +1253,19 @@ function esc(s) {
   return d.innerHTML;
 }
 
+// #60 Phase 1: mm:ss formatting for the possible-multi-conversation
+// warning's suspected time ranges (raw seconds, straight from the
+// transcript's own segment timestamps).
+function formatTimeRange(startSeconds, endSeconds) {
+  const fmt = (s) => {
+    const total = Math.max(0, Math.round(s || 0));
+    const m = Math.floor(total / 60);
+    const sec = total % 60;
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+  return `${fmt(startSeconds)}\u2013${fmt(endSeconds)}`;
+}
+
 // --- Offline read cache (Option A: read-only, not full sync) ---
 //
 // The wrapper app can't cache anything itself - it loads this whole page
@@ -1619,6 +1633,23 @@ async function renderConversationDetail(stem) {
   if (c.speaker_count) {
     const label = c.speaker_count === 1 ? '1 speaker detected' : `${c.speaker_count} speakers detected`;
     html += ` <span style="color:var(--color-text-muted);font-size:var(--text-sm);">${label}</span>`;
+  }
+
+  // #60 Phase 1: automatic, non-authoritative detection that this
+  // recording might actually be multiple genuinely unrelated moments
+  // merged into one file - surfaced so a person can judge for themselves
+  // and manually split via Edit if it's a real instance of the bug,
+  // rather than analyzer.py silently forcing a false connected-sounding
+  // narrative across unrelated moments. Nothing is auto-split yet.
+  if (c.possible_distinct_conversations && c.possible_distinct_conversations.segments && c.possible_distinct_conversations.segments.length) {
+    const segs = c.possible_distinct_conversations.segments;
+    html += `<div style="background:var(--color-bg-danger);border:1px solid var(--color-warning);border-left:3px solid var(--color-warning);border-radius:8px;padding:var(--space-3);margin-top:var(--space-3);">
+      <div style="font-weight:600;color:var(--color-warning);margin-bottom:var(--space-2);">&#9888; This might actually be ${segs.length} separate, unrelated moments merged into one conversation</div>
+      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Automatic detection, not certain — if this looks wrong, edit the conversation to split it up manually.</div>
+      <ul style="font-size:var(--text-sm);margin:0;padding-left:var(--space-5);">
+        ${segs.map(s => `<li>${esc(formatTimeRange(s.start_time, s.end_time))} — ${esc(s.topic_hint || '')}</li>`).join('')}
+      </ul>
+    </div>`;
   }
 
   if (unnamedSpeakers.speakers && unnamedSpeakers.speakers.length) {

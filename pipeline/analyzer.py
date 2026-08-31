@@ -9,10 +9,16 @@ import logging
 import re
 import urllib.error
 import urllib.request
+from typing import Optional
 
 import config
 import data_store
-from prompts import SYSTEM_PROMPT, build_user_prompt
+from prompts import (
+    SYSTEM_PROMPT,
+    build_user_prompt,
+    SEGMENT_DETECTION_SYSTEM_PROMPT,
+    build_segment_detection_prompt,
+)
 
 log = logging.getLogger("omi.analyzer")
 
@@ -47,6 +53,15 @@ _PLACEHOLDER_NON_DECISION_PHRASES = {
 # rule, but nothing upstream of that decided it shouldn't become a
 # conversation entry at all.
 MIN_WORDS_FOR_ANALYSIS = 4
+
+# #60 Phase 1: below this duration, skip the merged-conversation detection
+# pass entirely — a short recording is both unlikely to have actually
+# captured multiple genuinely separate, unrelated moments, and gives the
+# model less content to work with either way (more room to misjudge on too
+# little material). Tune freely once this has run against real data —
+# there's no principled reason 90s is exactly right, just a reasonable
+# starting point.
+MIN_DURATION_FOR_SEGMENT_CHECK_SECONDS = 90
 
 
 def _is_trivial_transcript(transcript_text: str) -> bool:
@@ -188,6 +203,81 @@ def analyze_transcript(transcript_text: str) -> dict:
     return result
 
 
+def _maybe_detect_possible_segments(stem: str) -> Optional[dict]:
+    """
+    #60 Phase 1 (detect + flag only — nothing is actually split yet): a
+    best-effort, soft-failing check for whether this recording might
+    actually have captured multiple genuinely distinct, unrelated
+    conversations merged into one file (e.g. moving between rooms, or an
+    unrelated moment following a long-but-real pause). Returns None (no
+    warning shown) on any failure, on short recordings, or when detection
+    itself concludes it's one real conversation — never raises, and never
+    affects whether the main analysis above succeeds or what it contains.
+
+    Deliberately a SEPARATE Ollama call using segment-level timestamps
+    read directly from the raw <stem>.json transcript, rather than folding
+    this into analyze_transcript() or reusing build_analysis_text()'s
+    output — that text is deliberately timestamp-free flowing prose (see
+    its own docstring: reformatting it previously caused a confirmed
+    regression in key_points quality and participant hallucination),
+    which is exactly the opposite of what this specific check needs.
+    Keeping this fully separate means it can never regress the main,
+    already-tuned analysis path, even if this detection pass itself turns
+    out to need more tuning later.
+    """
+    transcript_path = config.TRANSCRIPTS_DIR / f"{stem}.json"
+    if not transcript_path.exists():
+        return None
+    try:
+        raw = json.loads(transcript_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    if raw.get("duration", 0) < MIN_DURATION_FOR_SEGMENT_CHECK_SECONDS:
+        return None
+
+    segments = [s for s in raw.get("segments", []) if s.get("text", "").strip()]
+    if len(segments) < 2:
+        return None
+
+    payload = {
+        "model": config.OLLAMA_MODEL,
+        "system": SEGMENT_DETECTION_SYSTEM_PROMPT,
+        "prompt": build_segment_detection_prompt(segments),
+        "format": "json",
+        "stream": False,
+        "options": {"temperature": 0.2},
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{config.OLLAMA_HOST}/api/generate",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:  # noqa: S310 — scheme validated in config.py
+            body = json.loads(resp.read().decode("utf-8"))
+        detection = json.loads(body.get("response", ""))
+    except (urllib.error.URLError, json.JSONDecodeError) as e:
+        log.warning("Segment-boundary detection failed for %s (main analysis unaffected): %s", stem, e)
+        return None
+
+    if detection.get("is_single_conversation", True):
+        return None
+
+    flagged_segments = detection.get("segments") or []
+    if len(flagged_segments) < 2:
+        # A "split" that isn't actually multiple pieces is a degenerate
+        # signal, not a real finding — don't surface a confusing warning
+        # over what amounts to noise.
+        return None
+
+    log.info("Possible multi-conversation split detected for %s: %d segments", stem, len(flagged_segments))
+    return {"segments": flagged_segments}
+
+
 def analyze_and_write(transcript_text: str, stem: str) -> None:
     """
     Runs analysis and writes `<stem>.analysis.json` into TRANSCRIPTS_DIR,
@@ -200,6 +290,14 @@ def analyze_and_write(transcript_text: str, stem: str) -> None:
     transcript/audio stay on disk and archive normally either way; this
     only decides whether it gets promoted into a full "conversation" shown
     in the UI.
+
+    #60 Phase 1: also runs a separate, best-effort check for whether this
+    recording might actually be multiple distinct, unrelated conversations
+    merged into one — if so, attaches a non-authoritative
+    "possible_distinct_conversations" field to the written analysis for
+    the UI to surface as a warning. Detection-only: nothing is actually
+    split, no new conversation entries are created, and a failure/negative
+    result here never blocks the real analysis above from being written.
     """
     if _is_trivial_transcript(transcript_text):
         log.info(
@@ -213,6 +311,8 @@ def analyze_and_write(transcript_text: str, stem: str) -> None:
     except RuntimeError as e:
         log.warning("Analysis failed for %s (transcript is still kept): %s", stem, e)
         return
+
+    result["possible_distinct_conversations"] = _maybe_detect_possible_segments(stem)
 
     out_path = config.TRANSCRIPTS_DIR / f"{stem}.analysis.json"
     out_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
