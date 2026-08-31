@@ -43,7 +43,8 @@ SYSTEM_PROMPT = f"""You are analyzing a transcript of a real conversation or voi
       "description": "A specific, actionable task, commitment, or reminder",
       "due_date": "A specific date/time mentioned for this item (e.g. 'Thursday', 'next Tuesday at 2pm'), or null if none was mentioned",
       "owner": "The name of the person responsible for this, ONLY if this is a multi-person conversation where that's actually stated (e.g. 'Mike will follow up on X') — null for a personal voice memo or when it's simply the speaker's own task with no other named parties involved",
-      "completed": false
+      "completed": false,
+      "possible_duplicate_of": "ONLY set when the Reference data section below lists an already-open action item that describes this EXACT SAME real task (not just a similar category of task) — copy that existing item's description here verbatim. Otherwise null."
     }}
   ],
   "key_facts": [
@@ -79,24 +80,46 @@ Rules:
 - Never combine two separately-true numbers into one fact or detail that implies a relationship between them unless the transcript itself actually stated that relationship. For example, if the transcript separately mentions "745 credits remaining" at one point and "321 users" at a different, unrelated point, do not write "745 credits remaining, with an average usage of 321 users" — both numbers are individually real, but pairing them together fabricates a connection between them that was never actually said. Each such number belongs in its own separate fact or detail unless the transcript explicitly links them together itself.
 - mentioned_lists is for casually-mentioned things the speaker wants to check out or try later (movies, books, restaurants, products, etc.) — NOT tasks (those belong in action_items) and NOT facts to remember (those belong in key_facts). If nothing like this was mentioned, return an empty list.
 - If the transcript itself is empty, near-empty, or contains only brief non-substantive sound (a stray word, background noise transcribed as filler, silence), say so honestly: a short, minimal title and overview reflecting that little or nothing was actually said, with empty lists for topics/action_items/decisions_made/key_facts/mentioned_lists. Never manufacture a fuller conversation than what's actually there.
-- The prompt may include a "Reference data" section AFTER the transcript, listing category names already in use in past conversations. This is background information for YOUR OWN internal reference when choosing a list_name value — it is not something anyone said, not part of this conversation, and must never be described, quoted, discussed, or reflected in title, overview, topics, or any other field. If you find yourself writing a topic or summary ABOUT category names or reference data itself, stop — that is never the actual content of a real conversation, and indicates you've confused background reference data with something that was said.
+- The prompt may include a "Reference data" section AFTER the transcript, listing category names already in use in past conversations, and/or action items already logged as open earlier today. This is background information for YOUR OWN internal reference (choosing a list_name value, or filling in possible_duplicate_of) — it is not something anyone said, not part of this conversation, and must never be described, quoted, discussed, or reflected in title, overview, topics, or any other field. If you find yourself writing a topic or summary ABOUT this reference data itself, stop — that is never the actual content of a real conversation, and indicates you've confused background reference data with something that was said.
+- possible_duplicate_of: only set this when a new action item describes the SAME real task as one already listed as open earlier today in the Reference data section — not just a similar type of task. If uncertain, or if it's a genuinely different (even if related) task, leave it null. A real, distinct task incorrectly flagged as a duplicate is a worse outcome than an actual duplicate going unflagged.
 - Never fabricate action items, decisions, or topics from a transcript that doesn't actually support them, even under pressure to produce a substantive-looking summary. An accurate, minimal output for a sparse transcript is correct; an invented, detailed-sounding output is not.
 - title and overview must always be present and non-empty, even for casual or short conversations.
 - Output ONLY the JSON object. No preamble, no markdown code fences, no explanation.
 """
 
 
-def build_user_prompt(transcript_text: str, existing_list_names: list[str] | None = None) -> str:
-    context = ""
+def build_user_prompt(
+    transcript_text: str,
+    existing_list_names: list[str] | None = None,
+    existing_open_action_items: list[str] | None = None,
+) -> str:
+    context_parts = []
     if existing_list_names:
         names = ", ".join(existing_list_names)
-        context = (
-            f"\n\n--- END OF TRANSCRIPT ---\n\n"
-            f"[Reference data, NOT part of the conversation above, NOT said by anyone - "
-            f"for your own internal use only when choosing a list_name value]\n"
+        context_parts.append(
             f"Category names already in use across past conversations: {names}. "
             "If any newly-mentioned items clearly fit one of these existing categories, "
             "reuse that EXACT name rather than inventing a new, similarly-worded one."
+        )
+    if existing_open_action_items:
+        # #61: same-day duplicate-matching context. Deliberately just today's
+        # OPEN-as-of-analysis-time items, not full history — see
+        # data_store.get_open_action_item_descriptions_for_date()'s own
+        # docstring for the exact scope and its known trade-offs.
+        items = "; ".join(existing_open_action_items)
+        context_parts.append(
+            f"Action items already logged as open earlier today: {items}. "
+            "Use this ONLY to fill in possible_duplicate_of on a genuinely "
+            "matching new item — never mention this list anywhere else."
+        )
+
+    context = ""
+    if context_parts:
+        context = (
+            f"\n\n--- END OF TRANSCRIPT ---\n\n"
+            f"[Reference data, NOT part of the conversation above, NOT said by anyone - "
+            f"for your own internal use only]\n"
+            + "\n".join(context_parts)
         )
     return f"Transcript:\n\n{transcript_text}{context}\n\nProduce the JSON summary now."
 

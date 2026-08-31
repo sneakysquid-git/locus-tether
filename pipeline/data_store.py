@@ -268,3 +268,42 @@ def load_day_speech_coaching(target_date: date) -> list[dict]:
     """Just one day's worth — used by digest.py for the email digest."""
     target_str = target_date.isoformat()
     return [sc for sc in load_all_speech_coaching() if sc["_date"] == target_str]
+
+
+def get_open_action_item_descriptions_for_date(target_date: date, exclude_stem: str | None = None) -> list[str]:
+    """
+    #61: plain-text descriptions of action items from conversations dated
+    target_date (matching load_day_analyses' own date-matching), used as
+    same-day duplicate-matching context fed to the analyzer prompt. Lets
+    the model flag (never silently drop) a new action item that looks like
+    it describes the same real task as one already logged earlier today.
+
+    Deliberately same-day only, not full history — duplicates across
+    multiple separate recordings on the SAME day (e.g. a task mentioned
+    once in the morning and again that evening) are the case that's
+    actually caused real pain; matching against a task from three weeks
+    ago risks far more false positives (an old, since-resolved task vs. a
+    genuinely new recurrence of a similar one) for comparatively little
+    benefit. Widening this scope is a reasonable future iteration once
+    this same-day version has real usage behind it.
+
+    Also deliberately does NOT cross-reference todo_state.json's
+    completion overlay — that state lives in webapp/, which pipeline/
+    never imports from (see the README's directory-layout note, and
+    todo_state.json's own already-completed items would need that same-
+    process boundary crossed to check). Accepted trade-off: a same-day
+    item that's already been checked off by the time a later recording
+    repeats it still gets included here, which just means an occasional
+    duplicate flag against an already-resolved item — a visible, harmless
+    false flag, not a silently dropped new task.
+    """
+    exclude_stem = exclude_stem or ""
+    descriptions = []
+    for a in load_day_analyses(target_date):
+        if a.get("_stem") == exclude_stem:
+            continue
+        for item in a.get("action_items", []):
+            desc = item.get("description")
+            if desc:
+                descriptions.append(desc)
+    return descriptions

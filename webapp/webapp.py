@@ -89,6 +89,7 @@ def _serialize_action_items(analysis: dict) -> list[dict]:
                 "description": item["description"],
                 "due_date": item.get("due_date"),
                 "owner": item.get("owner"),
+                "possible_duplicate_of": item.get("possible_duplicate_of"),
                 "completed": todo_state.is_completed(item_id, item.get("completed", False)),
             }
         )
@@ -1347,6 +1348,17 @@ function ownerLabel(item) {
   return item.owner ? ` <span style="color:var(--color-accent);font-size:var(--text-sm);">(${esc(item.owner)})</span>` : '';
 }
 
+// #61: flag-only duplicate warning, shown next to an action item when the
+// analyzer thinks it describes the same real task as one already logged
+// open earlier today. Nothing merges or deletes automatically - this is
+// just a visible nudge; resolve it via Edit on whichever conversation(s)
+// actually have the duplicate.
+function duplicateLabel(item) {
+  return item.possible_duplicate_of
+    ? ` <span style="color:var(--color-warning);font-size:var(--text-sm);" title="Possible duplicate of an already-open item">&#9888; possible duplicate of: ${esc(item.possible_duplicate_of)}</span>`
+    : '';
+}
+
 // --- Simple client-side router using the History API, so both the
 // on-page back button AND the phone's actual back gesture behave correctly. ---
 function currentState() {
@@ -1517,7 +1529,7 @@ async function renderToday() {
       return `<div class="todo-row" style="${borderStyle}" data-todo-id="${esc(item.id)}" onclick="goDetail('conversations','${esc(item.source_stem)}')">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
           onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
-        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}
+        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}${duplicateLabel(item)}
         <span class="source-label"> — ${esc(item.source_title)}</span></span>
       </div>`;
     });
@@ -1740,7 +1752,7 @@ async function renderConversationDetail(stem) {
       html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
         <input type="checkbox" ${item.completed ? 'checked' : ''}
           onclick="toggleTodo('${item.id}', ${item.completed})">
-        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}</span>
+        <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}${duplicateLabel(item)}</span>
       </div>`;
     });
   }
@@ -2100,7 +2112,7 @@ async function renderTodos() {
     html += `<div class="todo-row" data-todo-id="${esc(item.id)}" ${rowClick}>
       <input type="checkbox" ${item.completed ? 'checked' : ''}
         onclick="event.stopPropagation(); toggleTodo('${item.id}', ${item.completed})">
-      <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}
+      <span class="desc ${item.completed ? 'todo-done' : ''}">${esc(item.description)}${dueHtml}${ownerLabel(item)}${duplicateLabel(item)}
       ${sourceOrDelete}</span>
     </div>`;
   });
@@ -2165,7 +2177,7 @@ async function renderCompletedTodos() {
     const dueHtml = item.due_date ? ` <span class="due">(due: ${esc(item.due_date)})</span>` : '';
     html += `<div class="todo-row" data-todo-id="${esc(item.id)}">
       <input type="checkbox" checked onclick="toggleTodo('${item.id}', true)">
-      <span class="desc todo-done">${esc(item.description)}${dueHtml}${ownerLabel(item)}
+      <span class="desc todo-done">${esc(item.description)}${dueHtml}${ownerLabel(item)}${duplicateLabel(item)}
       <span class="source-label" onclick="event.stopPropagation(); goDetail('conversations','${esc(item.source_stem)}')">
         — ${esc(item.source_title)} (${esc(item.date)})</span></span>
     </div>`;

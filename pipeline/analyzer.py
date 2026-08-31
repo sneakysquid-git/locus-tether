@@ -9,6 +9,7 @@ import logging
 import re
 import urllib.error
 import urllib.request
+from datetime import date
 from typing import Optional
 
 import config
@@ -117,19 +118,27 @@ def _find_unsupported_numbers(facts: list, source_text: str) -> list:
     return flagged
 
 
-def analyze_transcript(transcript_text: str) -> dict:
+def analyze_transcript(transcript_text: str, stem: Optional[str] = None) -> dict:
     """
     Calls Ollama to produce structured JSON output for the given transcript
     text. Raises RuntimeError on any failure (unreachable Ollama, invalid
     JSON, missing expected fields) — callers should catch this and treat it
     as a soft failure, not a reason to lose the underlying transcript.
+
+    #61: `stem`, when given, is used only to exclude this conversation's
+    own (possibly pre-existing, if this is a reprocess) action items from
+    the same-day duplicate-matching context passed to the prompt — it
+    never affects anything else about the analysis.
     """
     existing_list_names = data_store.get_all_list_names()
+    existing_open_action_items = data_store.get_open_action_item_descriptions_for_date(
+        date.today(), exclude_stem=stem
+    )
 
     payload = {
         "model": config.OLLAMA_MODEL,
         "system": SYSTEM_PROMPT,
-        "prompt": build_user_prompt(transcript_text, existing_list_names),
+        "prompt": build_user_prompt(transcript_text, existing_list_names, existing_open_action_items),
         "format": "json",
         "stream": False,
         "options": {"temperature": 0.2},
@@ -169,6 +178,16 @@ def analyze_transcript(transcript_text: str) -> dict:
     result["decisions_made"] = [
         d for d in result.get("decisions_made", []) if not _is_placeholder_non_decision(d)
     ]
+
+    # #61: normalize possible_duplicate_of on every action item so the
+    # stored analysis has a consistent shape (always present, always
+    # either a non-empty string or None) regardless of whether the model
+    # included the key at all, sent an empty string, or something else
+    # malformed — the webapp's rendering can then trust the field's shape
+    # without its own defensive checks.
+    for item in result.get("action_items", []):
+        dup = item.get("possible_duplicate_of")
+        item["possible_duplicate_of"] = dup if isinstance(dup, str) and dup.strip() else None
 
     # Upgraded from logging-only to active filtering (see #40) — this
     # exact fabrication pattern (a percentage repurposed into a fabricated
@@ -298,6 +317,11 @@ def analyze_and_write(transcript_text: str, stem: str) -> None:
     the UI to surface as a warning. Detection-only: nothing is actually
     split, no new conversation entries are created, and a failure/negative
     result here never blocks the real analysis above from being written.
+
+    #61: action_items in the written analysis may carry a
+    "possible_duplicate_of" field (see analyze_transcript) flagging a
+    likely same-day duplicate of an already-open item — flag-only, nothing
+    is merged or dropped automatically.
     """
     if _is_trivial_transcript(transcript_text):
         log.info(
@@ -307,7 +331,7 @@ def analyze_and_write(transcript_text: str, stem: str) -> None:
         return
 
     try:
-        result = analyze_transcript(transcript_text)
+        result = analyze_transcript(transcript_text, stem)
     except RuntimeError as e:
         log.warning("Analysis failed for %s (transcript is still kept): %s", stem, e)
         return
