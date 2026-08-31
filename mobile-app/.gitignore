@@ -1,0 +1,24 @@
+node_modules/
+.DS_Store
+*.log
+
+# Android
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/captures/
+android/app/release/
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.iml
+.idea/
+.gradle/
+build/
+proguard/
