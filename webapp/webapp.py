@@ -1559,20 +1559,24 @@ async function renderToday() {
 
   // --- #64: "Focus areas for today" - yesterday's recurring speaking-style
   // patterns (never today's own still-growing aggregate; see
-  // speech_coach.aggregate_daily_themes' docstring for why). Deliberately
-  // silent when there's nothing recurring to show, rather than a
-  // near-empty box - both "no coaching ran yesterday" and "coaching ran
-  // but nothing recurred" render nothing here at all.
-  if (data.yesterday_themes && data.yesterday_themes.themes && data.yesterday_themes.themes.length) {
-    const yt = data.yesterday_themes.themes;
-    html += `<div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-3);margin-bottom:var(--space-4);">
-      <div style="font-weight:600;margin-bottom:var(--space-1);">Focus areas for today</div>
-      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Based on yesterday's speaking patterns</div>
+  // speech_coach.aggregate_daily_themes' docstring for why). Always shown
+  // under the stats bar, with honest messaging per state - no coaching
+  // ran yesterday, coaching ran but nothing recurred, or real themes -
+  // rather than disappearing silently when there's nothing to show.
+  html += `<div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-3);margin-bottom:var(--space-4);">
+    <div style="font-weight:600;margin-bottom:var(--space-1);">Focus areas for today</div>`;
+  const yt = data.yesterday_themes || { conversation_count: 0, themes: [] };
+  if (!yt.conversation_count) {
+    html += `<div style="font-size:var(--text-sm);color:var(--color-text-muted);">No speaking-style coaching ran yesterday.</div>`;
+  } else if (!yt.themes.length) {
+    html += `<div style="font-size:var(--text-sm);color:var(--color-text-muted);">${yt.conversation_count} conversation${yt.conversation_count === 1 ? '' : 's'} coached yesterday, but nothing recurred across them.</div>`;
+  } else {
+    html += `<div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Based on yesterday's speaking patterns</div>
       <ul style="font-size:var(--text-sm);margin:0;padding-left:var(--space-5);">
-        ${yt.map(t => `<li><strong>${esc(t.theme)}</strong> — ${esc(t.description)}</li>`).join('')}
-      </ul>
-    </div>`;
+        ${yt.themes.map(t => `<li><strong>${esc(t.theme)}</strong> — ${esc(t.description)}</li>`).join('')}
+      </ul>`;
   }
+  html += `</div>`;
 
   // --- To-Dos today: due-soon + regular action items merged into ONE
   // section (previously two separately-headed blocks) — due-soon items
