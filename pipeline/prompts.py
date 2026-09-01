@@ -206,3 +206,41 @@ def build_segment_detection_prompt(segments: list[dict]) -> str:
     ]
     transcript_block = "\n".join(lines)
     return f"Timestamped transcript:\n\n{transcript_block}\n\nEvaluate this transcript now."
+
+
+# --- #64: daily recurring-theme aggregation for speaking-style coaching ---
+DAILY_THEME_SYSTEM_PROMPT = """You are reviewing a full day's worth of individual speaking-style coaching reports to identify genuinely RECURRING patterns across the day — not to repeat each report's own individual feedback back.
+
+Produce JSON matching this exact schema:
+
+{
+  "themes": [
+    {
+      "theme": "A short, specific name for this recurring pattern (e.g. 'Frequent um/uh filler usage', 'Hedging when proposing something new')",
+      "description": "One or two sentences describing how this pattern actually showed up across the day, addressed directly as \\"you\\"",
+      "example_stems": ["stem_a", "stem_b"]
+    }
+  ]
+}
+
+Rules:
+- Only include a theme if it genuinely recurred across TWO OR MORE separate conversations today — a single conversation's own one-off observation is not a day-level theme, even if it was worth noting there individually.
+- example_stems must be actual stem identifiers copied exactly from the input below, at most 2 per theme — pick the clearest examples, not every occurrence.
+- Prioritize genuinely distinct, useful patterns over padding the list. Returning an empty list is correct when today's reports show no real recurring pattern — do not manufacture one.
+- Address the person directly as "you" throughout, consistent with how the individual reports already do.
+- Output ONLY the JSON object. No preamble, no markdown code fences, no explanation.
+"""
+
+
+def build_daily_theme_prompt(entries: list[dict]) -> str:
+    """
+    entries: [{"stem": ..., "title": ..., "areas_to_improve": [{"observation": ...}, ...]}]
+    for one day's worth of speech-coaching reports.
+    """
+    blocks = []
+    for e in entries:
+        observations = [a.get("observation", "") for a in e.get("areas_to_improve", []) if a.get("observation")]
+        obs_text = "; ".join(observations) if observations else "no areas to improve noted"
+        blocks.append(f"[stem: {e['stem']}] \"{e.get('title', e['stem'])}\" — {obs_text}")
+    joined = "\n".join(blocks)
+    return f"Today's individual coaching reports:\n\n{joined}\n\nIdentify recurring themes now."

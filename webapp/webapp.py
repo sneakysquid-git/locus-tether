@@ -238,6 +238,11 @@ def api_today():
     archived = conversation_state.get_all_archived()
     analyses = [a for a in data_store.load_day_analyses(today) if a.get("_stem") not in archived]
     speech_coaching = data_store.load_day_speech_coaching(today)
+    # #64: yesterday specifically, not today's own still-growing aggregate
+    # (see speech_coach.aggregate_daily_themes' own docstring for why) -
+    # cached after the first call each day, so this stays cheap (a disk
+    # read, not a fresh Ollama call) on every subsequent Today page load.
+    yesterday_themes = speech_coach.aggregate_daily_themes(today - timedelta(days=1))
     # Genuinely zero data ANYWHERE (not just today) — distinct from an
     # ordinary empty day, this is specifically "nothing has ever been
     # processed," worth a real onboarding message rather than the usual
@@ -375,6 +380,7 @@ def api_today():
             "action_items": action_items,
             "lists_today": lists_today,
             "speech_coaching": speech_teasers,
+            "yesterday_themes": yesterday_themes,
             "stats": {
                 "conversation_count": len(analyses),
                 "people_count": len(people_today),
@@ -1009,6 +1015,37 @@ def api_save_vocabulary():
 
 # --- API: Feedback -----------------------------------------------------------
 
+@app.route("/api/feedback-daily")
+def api_feedback_daily_list():
+    """
+    #64: one entry per day that had speech coaching, most recent first.
+    Deliberately cheap — just distinct dates + counts from data already
+    on disk, no LLM call — so browsing this list never itself triggers
+    day-aggregate computation. That only happens when a specific day is
+    opened via /api/feedback-daily/<date>. Kept at its own top-level path
+    rather than nested under /api/feedback/ specifically to avoid any
+    ambiguity with the existing /api/feedback/<path:stem> route, whose
+    `path` converter would otherwise greedily match a nested URL here too.
+    """
+    coaching = data_store.load_all_speech_coaching()
+    by_date: dict[str, int] = {}
+    for sc in coaching:
+        d = sc.get("_date", "")
+        by_date[d] = by_date.get(d, 0) + 1
+    days = [{"date": d, "conversation_count": c} for d, c in by_date.items()]
+    days.sort(key=lambda x: x["date"], reverse=True)
+    return jsonify(days)
+
+
+@app.route("/api/feedback-daily/<path:date_str>")
+def api_feedback_daily_detail(date_str: str):
+    try:
+        target_date = date.fromisoformat(date_str)
+    except ValueError:
+        abort(400)
+    return jsonify(speech_coach.aggregate_daily_themes(target_date))
+
+
 @app.route("/api/feedback")
 def api_feedback():
     coaching = data_store.load_all_speech_coaching()
@@ -1389,7 +1426,10 @@ async function render(state) {
 
   if (state.detail) {
     if (state.tab === 'conversations') return renderConversationDetail(state.detail);
-    if (state.tab === 'feedback') return renderFeedbackDetail(state.detail);
+    if (state.tab === 'feedback') {
+      if (state.detail.startsWith('day:')) return renderFeedbackDayDetail(state.detail.slice(4));
+      return renderFeedbackDetail(state.detail);
+    }
     if (state.tab === 'lists') return renderListDetail(state.detail);
     if (state.tab === 'todos') return renderCompletedTodos();
     if (state.tab === 'settings' && state.detail === 'speakers') return renderSpeakerManagement();
@@ -1516,6 +1556,23 @@ async function renderToday() {
     html += statItem(micIcon, t.today_avg_wpm, trendLabel);
   }
   html += '</div>';
+
+  // --- #64: "Focus areas for today" - yesterday's recurring speaking-style
+  // patterns (never today's own still-growing aggregate; see
+  // speech_coach.aggregate_daily_themes' docstring for why). Deliberately
+  // silent when there's nothing recurring to show, rather than a
+  // near-empty box - both "no coaching ran yesterday" and "coaching ran
+  // but nothing recurred" render nothing here at all.
+  if (data.yesterday_themes && data.yesterday_themes.themes && data.yesterday_themes.themes.length) {
+    const yt = data.yesterday_themes.themes;
+    html += `<div style="background:var(--color-bg-card);border:1px solid var(--color-border);border-radius:8px;padding:var(--space-3);margin-bottom:var(--space-4);">
+      <div style="font-weight:600;margin-bottom:var(--space-1);">Focus areas for today</div>
+      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin-bottom:var(--space-2);">Based on yesterday's speaking patterns</div>
+      <ul style="font-size:var(--text-sm);margin:0;padding-left:var(--space-5);">
+        ${yt.map(t => `<li><strong>${esc(t.theme)}</strong> — ${esc(t.description)}</li>`).join('')}
+      </ul>
+    </div>`;
+  }
 
   // --- To-Dos today: due-soon + regular action items merged into ONE
   // section (previously two separately-headed blocks) — due-soon items
@@ -2186,9 +2243,13 @@ async function renderCompletedTodos() {
 }
 
 async function renderFeedbackList() {
+  // #64: one row per DAY now, not per conversation - per-conversation
+  // detail is still fully reachable (via a day's example-conversation
+  // links), just no longer the top-level list, since that's exactly the
+  // "50-60+ near-identical entries" problem this issue exists to fix.
   setHeader('Speaking Style Feedback', true, false);
   document.getElementById('content').innerHTML = 'Loading...';
-  const { data, fromCache, timestamp } = await cachedFetch('/api/feedback');
+  const { data, fromCache, timestamp } = await cachedFetch('/api/feedback-daily');
 
   if (!data.length) {
     document.getElementById('content').innerHTML = (fromCache ? cacheBannerHtml(timestamp) : '') +
@@ -2197,16 +2258,45 @@ async function renderFeedbackList() {
   }
 
   let html = fromCache ? cacheBannerHtml(timestamp) : '';
-  data.forEach(sc => {
-    html += `<div class="list-row" onclick="goDetail('feedback', '${esc(sc.stem)}')">
-      <div style="display:flex;justify-content:space-between;">
-        <div style="font-weight:600;">${esc(sc.title)}</div>
-        <div class="date-label">${esc(sc.date)}</div>
+  data.forEach(d => {
+    html += `<div class="list-row" onclick="goDetail('feedback', 'day:${esc(d.date)}')">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;">
+        <div style="font-weight:600;">${esc(d.date)}</div>
+        <div class="date-label">${d.conversation_count} conversation${d.conversation_count === 1 ? '' : 's'}</div>
       </div>
-      <div style="font-size:var(--text-sm);color:var(--color-text-muted);margin:var(--space-1) 0;">${sc.words_per_minute} WPM</div>
-      <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin:0;">${esc(sc.overall_take_preview)}</p>
     </div>`;
   });
+  document.getElementById('content').innerHTML = html;
+}
+
+async function renderFeedbackDayDetail(dateStr) {
+  setHeader('', false, true);
+  document.getElementById('content').innerHTML = 'Loading...';
+  let data, fromCache, timestamp;
+  try {
+    ({ data, fromCache, timestamp } = await cachedFetch(`/api/feedback-daily/${encodeURIComponent(dateStr)}`));
+  } catch (err) {
+    document.getElementById('content').innerHTML = '<p class="empty">Not found.</p>';
+    return;
+  }
+
+  let html = (fromCache ? cacheBannerHtml(timestamp) : '') + `<h1 style="margin-top:var(--space-2);">${esc(dateStr)}</h1>`;
+
+  if (!data.conversation_count) {
+    html += '<p class="empty">No speaking-style coaching ran this day.</p>';
+  } else if (!data.themes.length) {
+    html += `<p class="empty">${data.conversation_count} conversation${data.conversation_count === 1 ? '' : 's'} coached this day, but no recurring pattern stood out — check individual conversations for their own feedback.</p>`;
+  } else {
+    data.themes.forEach(t => {
+      html += `<div class="card">
+        <div style="font-weight:600;margin-bottom:var(--space-1);">${esc(t.theme)}</div>
+        <p style="font-size:var(--text-sm);color:var(--color-text-muted);margin:0 0 var(--space-2);">${esc(t.description)}</p>
+        <div style="font-size:var(--text-sm);">
+          ${(t.example_stems || []).map(stem => `<span class="source-label" onclick="goDetail('feedback','${esc(stem)}')" style="margin-right:var(--space-2);">View example &rarr;</span>`).join('')}
+        </div>
+      </div>`;
+    });
+  }
   document.getElementById('content').innerHTML = html;
 }
 

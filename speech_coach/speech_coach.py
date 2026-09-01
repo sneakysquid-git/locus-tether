@@ -14,16 +14,26 @@ Usage:
     python3 speech_coach.py ~/omi-data/transcripts/testrec.json
 """
 import json
+import logging
 import sys
 import urllib.error
 import urllib.request
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 
 import config
+import data_store
 import speech_metrics
-from prompts import SPEECH_COACH_SYSTEM_PROMPT, build_speech_coach_prompt
+from prompts import (
+    SPEECH_COACH_SYSTEM_PROMPT,
+    build_speech_coach_prompt,
+    DAILY_THEME_SYSTEM_PROMPT,
+    build_daily_theme_prompt,
+)
+
+log = logging.getLogger("omi.speech_coach")
 
 EXPECTED_KEYS = {"strengths", "areas_to_improve", "pace_feedback", "overall_take"}
 
@@ -91,6 +101,110 @@ def generate_coaching_report(transcript_path: Path) -> dict:
     metrics = speech_metrics.analyze_speech_metrics(filtered_transcript, all_segments=all_segments)
     feedback = get_coaching_feedback(filtered_transcript, metrics)
     return {"metrics": metrics, "feedback": feedback}
+
+
+def get_daily_themes(entries: list[dict]) -> dict:
+    """
+    #64: a separate Ollama call from get_coaching_feedback above — looks
+    ACROSS a day's worth of already-generated per-conversation reports to
+    find genuinely recurring patterns, rather than generating any new
+    per-conversation feedback itself.
+    """
+    payload = {
+        "model": config.OLLAMA_MODEL,
+        "system": DAILY_THEME_SYSTEM_PROMPT,
+        "prompt": build_daily_theme_prompt(entries),
+        "format": "json",
+        "stream": False,
+        "options": {"temperature": 0.3},
+    }
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        f"{config.OLLAMA_HOST}/api/generate",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=300) as resp:  # noqa: S310 — scheme validated in config.py
+            body = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Could not reach Ollama at {config.OLLAMA_HOST}: {e}") from e
+
+    raw_response = body.get("response", "")
+    try:
+        result = json.loads(raw_response)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"Ollama did not return valid JSON despite format='json'. Raw output:\n{raw_response}"
+        ) from e
+
+    if "themes" not in result:
+        raise RuntimeError(f"Model output missing 'themes' key\nFull output: {result}")
+
+    return result
+
+
+def aggregate_daily_themes(target_date: date) -> dict:
+    """
+    #64: one aggregate entry per day, surfacing recurring speaking-style
+    patterns across that day's conversations rather than making someone
+    read through 50-60+ near-identical per-conversation reports.
+
+    Cached to disk as <date>.daily_theme.json for any day strictly BEFORE
+    today (that day's data is final and won't change) — recomputed fresh
+    on every call for today itself, deliberately never cached, since
+    today keeps growing as new conversations come in throughout the day.
+
+    Returns {"date": ..., "conversation_count": ..., "themes": [...]}.
+    conversation_count exists specifically so callers can distinguish "no
+    coaching ran that day at all" (0) from "coaching ran but no real
+    recurring pattern was found" (themes empty, count > 0) — those need
+    different messaging, not the same generic "nothing here" state.
+
+    Never raises — a failed Ollama call here means a nice-to-have summary
+    is missing, never a reason to break the Feedback tab or Today page.
+    """
+    cache_path = config.TRANSCRIPTS_DIR / f"{target_date.isoformat()}.daily_theme.json"
+    is_past_day = target_date < date.today()
+
+    if is_past_day and cache_path.exists():
+        try:
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass  # fall through and recompute rather than get stuck on a corrupt cache
+
+    day_coaching = data_store.load_day_speech_coaching(target_date)
+    if not day_coaching:
+        return {"date": target_date.isoformat(), "conversation_count": 0, "themes": []}
+
+    entries = []
+    for sc in day_coaching:
+        stem = sc.get("_stem", "")
+        analysis = data_store.load_analysis_by_stem(stem)
+        title = analysis.get("title", stem) if analysis else stem
+        entries.append(
+            {
+                "stem": stem,
+                "title": title,
+                "areas_to_improve": sc.get("feedback", {}).get("areas_to_improve", []),
+            }
+        )
+
+    result = {"date": target_date.isoformat(), "conversation_count": len(entries), "themes": []}
+    try:
+        themes_result = get_daily_themes(entries)
+        result["themes"] = themes_result.get("themes", [])
+    except RuntimeError as e:
+        log.warning("Daily theme aggregation failed for %s: %s", target_date.isoformat(), e)
+        # conversation_count still reflects the real data; themes just
+        # stays empty rather than the whole thing erroring out.
+
+    if is_past_day:
+        cache_path.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return result
 
 
 def print_report(metrics: dict, feedback: dict) -> None:
