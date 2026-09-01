@@ -64,6 +64,21 @@ MIN_WORDS_FOR_ANALYSIS = 4
 # starting point.
 MIN_DURATION_FOR_SEGMENT_CHECK_SECONDS = 90
 
+# #60 Phase 1 real-world failure (confirmed): on one real recording, the
+# detector returned 194 "segments" averaging ~1-2 seconds each — it had
+# echoed back nearly every individual transcript line/pause as its own
+# supposed "conversation" instead of reasoning about genuine topic
+# discontinuity, despite the prompt explicitly warning against exactly
+# this. A real distinct conversation merged into one recording is
+# measured in MINUTES, not seconds — an implausibly high segment count or
+# implausibly short average segment length is a far stronger signal of
+# a degenerate, broken result than of an actual finding. This guard
+# exists specifically because prompt wording alone did not prevent this
+# on a real transcript, and a wrong-but-confident warning is worse than
+# no warning at all.
+MAX_REASONABLE_SEGMENTS = 6
+MIN_REASONABLE_SEGMENT_SECONDS = 20
+
 
 def _is_trivial_transcript(transcript_text: str) -> bool:
     """
@@ -291,6 +306,17 @@ def _maybe_detect_possible_segments(stem: str) -> Optional[dict]:
         # A "split" that isn't actually multiple pieces is a degenerate
         # signal, not a real finding — don't surface a confusing warning
         # over what amounts to noise.
+        return None
+
+    total_duration = raw.get("duration", 0)
+    avg_segment_seconds = total_duration / len(flagged_segments) if flagged_segments else 0
+    if len(flagged_segments) > MAX_REASONABLE_SEGMENTS or avg_segment_seconds < MIN_REASONABLE_SEGMENT_SECONDS:
+        log.warning(
+            "Discarding implausible segment-detection result for %s: %d segments, "
+            "avg %.1fs each (recording is %.1fs total) — almost certainly echoing "
+            "transcript lines rather than finding real discontinuity",
+            stem, len(flagged_segments), avg_segment_seconds, total_duration,
+        )
         return None
 
     log.info("Possible multi-conversation split detected for %s: %d segments", stem, len(flagged_segments))

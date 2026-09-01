@@ -175,6 +175,8 @@ SEGMENT_DETECTION_SYSTEM_PROMPT = """You are analyzing a timestamped transcript 
 
 This is about genuine topic/context discontinuity - NOT about normal conversational pauses, natural topic changes within one ongoing conversation, or a single conversation/meeting that moves between several related subjects. A single conversation covering five different points is still ONE conversation. Only flag a split when the content is truly unrelated: a different setting, different people, or a completely disconnected topic with no real continuity from what came immediately before.
 
+CRITICAL - scale: a genuinely distinct segment is measured in MINUTES of continuous conversation, not seconds. The transcript below is broken into short bracketed timestamp lines purely as INPUT FORMATTING - each individual bracketed line is NOT itself a "segment" to report, and you must never return one segment per line, per pause, or per brief topic shift. A normal back-and-forth (e.g. a parent and child chatting through several small topics — school, then a rainbow, then plans for tomorrow) is still ONE segment even though it visibly touches many short topics within seconds of each other. If you find yourself about to list more than 3-4 segments, or any segment shorter than about a minute, stop - you are almost certainly confusing ordinary turn-taking or topic drift within one real conversation for separate ones. In the large majority of real recordings, the correct answer is is_single_conversation: true.
+
 When genuinely uncertain, do NOT split - incorrectly fragmenting one real conversation into pieces is a worse outcome than occasionally leaving two disconnected moments merged together.
 
 Produce JSON matching this exact schema:
@@ -192,7 +194,7 @@ Produce JSON matching this exact schema:
 
 Rules:
 - If this is genuinely one continuous conversation (the common, default case), set is_single_conversation to true and return an empty list for segments.
-- Only when you are confident there are multiple truly unrelated moments, set is_single_conversation to false and list each distinct segment.
+- Only when you are confident there are multiple truly unrelated moments, set is_single_conversation to false and list each distinct segment - normally only 2-3 segments total, each spanning several minutes or more.
 - start_time and end_time must be actual timestamps copied from the transcript below - never invent or estimate a time that isn't shown.
 - Output ONLY the JSON object. No preamble, no markdown code fences, no explanation.
 """
