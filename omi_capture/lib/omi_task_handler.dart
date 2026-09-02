@@ -9,7 +9,7 @@ import 'package:opus_flutter/opus_flutter.dart' as opus_flutter;
 import 'omi_constants.dart';
 import 'segmenting_audio_writer.dart';
 
-const String outputDir = '/storage/emulated/0/Recordings';
+const String outputDir = '/storage/emulated/0/Recordings/Omi';
 
 /// Runs the actual BLE connection and continuous capture inside Android's
 /// foreground service context, rather than the UI's main isolate - this is
