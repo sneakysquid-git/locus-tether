@@ -345,12 +345,13 @@ packages:
     source: hosted
     version: "3.0.3"
   opus_flutter_android:
-    dependency: transitive
+    dependency: "direct overridden"
     description:
-      name: opus_flutter_android
-      sha256: "9e5b71f5d959e1ee3b5faf7e1e893aabe7955d3a234c83f02462d801a5218497"
-      url: "https://pub.dev"
-    source: hosted
+      path: opus_flutter_android
+      ref: "65b160de73420cd77f6706878f8ec9e6ac3cc3fb"
+      resolved-ref: "65b160de73420cd77f6706878f8ec9e6ac3cc3fb"
+      url: "https://github.com/sneakysquid-git/opus_flutter.git"
+    source: git
     version: "3.0.1"
   opus_flutter_ios:
     dependency: transitive

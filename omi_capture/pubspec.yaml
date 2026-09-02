@@ -96,3 +96,10 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+dependency_overrides:
+  opus_flutter_android:
+    git:
+      url: https://github.com/sneakysquid-git/opus_flutter.git
+      ref: 65b160de73420cd77f6706878f8ec9e6ac3cc3fb
+      path: opus_flutter_android

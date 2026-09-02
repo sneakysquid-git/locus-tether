@@ -7,6 +7,7 @@ plugins {
 android {
     namespace = "com.example.omi_capture"
     compileSdk = 37
+    compileSdkMinor = 0
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

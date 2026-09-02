@@ -47,7 +47,7 @@ class OmiTaskHandler extends TaskHandler {
 
       final resultsSub = FlutterBluePlus.scanResults.listen((results) async {
         for (final r in results) {
-          if (r.advertisementData.serviceUuids.any((u) => u.str.toLowerCase() == omiServiceUuid)) {
+          if (r.advertisementData.serviceUuids.any((u) => u.str.toLowerCase() == omiServiceUuid) || r.advertisementData.advName.toLowerCase() == 'omi' || r.device.platformName.toLowerCase() == 'omi') {
             await FlutterBluePlus.stopScan();
             await _connect(r.device);
             break;
