@@ -23,7 +23,9 @@ void startCallback() {
 class OmiTaskHandler extends TaskHandler {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _audioChar;
+  BluetoothCharacteristic? _batteryChar;
   StreamSubscription<List<int>>? _audioSub;
+  StreamSubscription<List<int>>? _batterySub;
   StreamSubscription<BluetoothConnectionState>? _connectionSub;
   SegmentingAudioWriter? _writer;
 
@@ -179,6 +181,10 @@ class OmiTaskHandler extends TaskHandler {
       _audioSub = null;
       _audioChar = null;
 
+      await _batterySub?.cancel();
+      _batterySub = null;
+      _batteryChar = null;
+
       if (Platform.isAndroid && device.mtuNow < 512) {
         try {
           await device.requestMtu(512);
@@ -194,6 +200,45 @@ class OmiTaskHandler extends TaskHandler {
       // reconnect. Reusing the old characteristic object is not reliable.
       final services = await device.discoverServices();
       if (!device.isConnected) return;
+
+      for (final service in services) {
+        if (service.uuid.str128.toLowerCase() != batteryServiceUuid) continue;
+
+        for (final characteristic in service.characteristics) {
+          if (characteristic.uuid.str128.toLowerCase() ==
+              batteryLevelCharacteristicUuid) {
+            _batteryChar = characteristic;
+            break;
+          }
+        }
+
+        if (_batteryChar != null) break;
+      }
+
+      final batteryChar = _batteryChar;
+      if (batteryChar != null) {
+        try {
+          final value = await batteryChar.read();
+          if (value.isNotEmpty) {
+            FlutterForegroundTask.sendDataToMain({
+              'batteryLevel': value[0].clamp(0, 100),
+            });
+          }
+
+          if (batteryChar.properties.notify) {
+            await batteryChar.setNotifyValue(true);
+            _batterySub = batteryChar.lastValueStream.listen((value) {
+              if (value.isEmpty) return;
+
+              FlutterForegroundTask.sendDataToMain({
+                'batteryLevel': value[0].clamp(0, 100),
+              });
+            });
+          }
+        } catch (_) {
+          // Battery reporting is optional and must never interrupt audio capture.
+        }
+      }
 
       final omiService = services.firstWhere(
         (s) => s.uuid.str128.toLowerCase() == omiServiceUuid,
@@ -268,6 +313,10 @@ class OmiTaskHandler extends TaskHandler {
       _audioSub = null;
       _audioChar = null;
 
+      await _batterySub?.cancel();
+      _batterySub = null;
+      _batteryChar = null;
+
       // Preserve any conversation captured up to the moment the BLE link
       // dropped. autoConnect remains enabled on the BluetoothDevice and the
       // connected event will rebuild services/notifications when it returns.
@@ -294,6 +343,7 @@ class OmiTaskHandler extends TaskHandler {
 
     await _connectionSub?.cancel();
     await _audioSub?.cancel();
+    await _batterySub?.cancel();
     await _writer?.flushCurrentSegment();
     await _writer?.dispose();
 

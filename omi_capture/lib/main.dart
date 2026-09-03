@@ -38,6 +38,7 @@ class CapturePage extends StatefulWidget {
 class _CapturePageState extends State<CapturePage> {
   String _status = 'Not started';
   bool _isRunning = false;
+  int? _batteryLevel;
   final List<String> _savedSegments = [];
 
   @override
@@ -60,6 +61,9 @@ class _CapturePageState extends State<CapturePage> {
     if (data is! Map<String, dynamic>) return;
     if (data['status'] != null) {
       setState(() => _status = data['status']);
+    }
+    if (data['batteryLevel'] != null) {
+      setState(() => _batteryLevel = data['batteryLevel'] as int);
     }
     if (data['savedSegment'] != null) {
       setState(() => _savedSegments.insert(0, '${data['savedSegment']} (${data['frameCount']} frames)'));
@@ -216,7 +220,18 @@ class _CapturePageState extends State<CapturePage> {
         padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
-            Text(_status, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyLarge),
+            Text(
+              _status,
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.bodyLarge,
+            ),
+            if (_batteryLevel != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Omi battery: $_batteryLevel%',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+            ],
             const SizedBox(height: 24),
             if (!_isRunning)
               ElevatedButton(onPressed: _startService, child: const Text('Start Listening'))
