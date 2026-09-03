@@ -39,6 +39,7 @@ class _CapturePageState extends State<CapturePage> {
   String _status = 'Not started';
   bool _isRunning = false;
   int? _batteryLevel;
+  int? _ledBrightness;
   final List<String> _savedSegments = [];
 
   @override
@@ -64,6 +65,9 @@ class _CapturePageState extends State<CapturePage> {
     }
     if (data['batteryLevel'] != null) {
       setState(() => _batteryLevel = data['batteryLevel'] as int);
+    }
+    if (data['ledBrightness'] != null) {
+      setState(() => _ledBrightness = data['ledBrightness'] as int);
     }
     if (data['savedSegment'] != null) {
       setState(() => _savedSegments.insert(0, '${data['savedSegment']} (${data['frameCount']} frames)'));
@@ -232,6 +236,29 @@ class _CapturePageState extends State<CapturePage> {
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
             ],
+            if (_ledBrightness != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'LED brightness: $_ledBrightness%',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              Slider(
+                value: _ledBrightness!.toDouble(),
+                min: 0,
+                max: 100,
+                divisions: 100,
+                label: '$_ledBrightness%',
+                onChanged: (value) {
+                  setState(() => _ledBrightness = value.round());
+                },
+                onChangeEnd: (value) {
+                  FlutterForegroundTask.sendDataToTask({
+                    'action': 'setLedBrightness',
+                    'value': value.round(),
+                  });
+                },
+              ),
+            ],           
             const SizedBox(height: 24),
             if (!_isRunning)
               ElevatedButton(onPressed: _startService, child: const Text('Start Listening'))

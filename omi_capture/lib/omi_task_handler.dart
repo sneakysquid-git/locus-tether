@@ -24,6 +24,7 @@ class OmiTaskHandler extends TaskHandler {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _audioChar;
   BluetoothCharacteristic? _batteryChar;
+  BluetoothCharacteristic? _settingsDimRatioChar;
   StreamSubscription<List<int>>? _audioSub;
   StreamSubscription<List<int>>? _batterySub;
   StreamSubscription<BluetoothConnectionState>? _connectionSub;
@@ -184,6 +185,7 @@ class OmiTaskHandler extends TaskHandler {
       await _batterySub?.cancel();
       _batterySub = null;
       _batteryChar = null;
+      _settingsDimRatioChar = null;
 
       if (Platform.isAndroid && device.mtuNow < 512) {
         try {
@@ -215,6 +217,20 @@ class OmiTaskHandler extends TaskHandler {
         if (_batteryChar != null) break;
       }
 
+      for (final service in services) {
+        if (service.uuid.str128.toLowerCase() != settingsServiceUuid) continue;
+
+        for (final characteristic in service.characteristics) {
+          if (characteristic.uuid.str128.toLowerCase() ==
+              settingsDimRatioCharacteristicUuid) {
+            _settingsDimRatioChar = characteristic;
+            break;
+          }
+        }
+
+        if (_settingsDimRatioChar != null) break;
+      }
+
       final batteryChar = _batteryChar;
       if (batteryChar != null) {
         try {
@@ -237,6 +253,20 @@ class OmiTaskHandler extends TaskHandler {
           }
         } catch (_) {
           // Battery reporting is optional and must never interrupt audio capture.
+        }
+      }
+
+      final settingsDimRatioChar = _settingsDimRatioChar;
+      if (settingsDimRatioChar != null) {
+        try {
+          final value = await settingsDimRatioChar.read();
+          if (value.isNotEmpty) {
+            FlutterForegroundTask.sendDataToMain({
+              'ledBrightness': value[0].clamp(0, 100),
+            });
+          }
+        } catch (_) {
+          // LED brightness reporting is optional and must never interrupt audio capture.
         }
       }
 
@@ -316,6 +346,7 @@ class OmiTaskHandler extends TaskHandler {
       await _batterySub?.cancel();
       _batterySub = null;
       _batteryChar = null;
+      _settingsDimRatioChar = null;
 
       // Preserve any conversation captured up to the moment the BLE link
       // dropped. autoConnect remains enabled on the BluetoothDevice and the
@@ -352,14 +383,41 @@ class OmiTaskHandler extends TaskHandler {
     await _device?.disconnect();
   }
 
+  Future<void> _setLedBrightness(int value) async {
+    final characteristic = _settingsDimRatioChar;
+    if (characteristic == null) return;
+
+    final brightness = value.clamp(0, 100).toInt();
+
+    try {
+      await characteristic.write([brightness], withoutResponse: false);
+
+      final readBack = await characteristic.read();
+      if (readBack.isNotEmpty) {
+        FlutterForegroundTask.sendDataToMain({
+          'ledBrightness': readBack[0].clamp(0, 100),
+        });
+      }
+    } catch (_) {
+      // LED control is optional and must never interrupt audio capture.
+    }
+  }
+
   @override
   void onReceiveData(Object data) {
     if (data is! Map) return;
+
     if (data['action'] == 'startForceRecord') {
       final minutes = data['minutes'] as int?;
       if (minutes == null || minutes <= 0) return;
       _writer?.startForceRecording(Duration(minutes: minutes));
     }
+
+    if (data['action'] == 'setLedBrightness') {
+        final value = data['value'] as int?;
+        if (value == null) return;
+        unawaited(_setLedBrightness(value));
+    }    
   }
 
   @override

@@ -16,6 +16,8 @@ const String audioDataStreamCharacteristicUuid = '19b10001-e8f2-537e-4f6c-d10476
 const String audioCodecCharacteristicUuid = '19b10002-e8f2-537e-4f6c-d104768a1214';
 const String batteryServiceUuid = '0000180f-0000-1000-8000-00805f9b34fb';
 const String batteryLevelCharacteristicUuid = '00002a19-0000-1000-8000-00805f9b34fb';
+const String settingsServiceUuid = '19b10010-e8f2-537e-4f6c-d104768a1214';
+const String settingsDimRatioCharacteristicUuid = '19b10011-e8f2-537e-4f6c-d104768a1214';
 
 // Codec byte values as read from the audioCodec characteristic. The
 // original my-omi mapping (1/10/20) was written against an older
