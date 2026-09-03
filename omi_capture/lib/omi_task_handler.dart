@@ -14,10 +14,7 @@ const String outputDir = '/storage/emulated/0/Recordings/Omi';
 /// Runs the actual BLE connection and continuous capture inside Android's
 /// foreground service context, rather than the UI's main isolate - this is
 /// the plugin's own documented pattern for a stream-based background data
-/// source (their example does the same with a location stream). Whether
-/// flutter_blue_plus itself keeps delivering data once the screen is off
-/// is the genuine, untested unknown here - everything else in this file
-/// is a straightforward port of already-confirmed-working logic.
+/// source (their example does the same with a location stream).
 @pragma('vm:entry-point')
 void startCallback() {
   FlutterForegroundTask.setTaskHandler(OmiTaskHandler());
@@ -27,7 +24,15 @@ class OmiTaskHandler extends TaskHandler {
   BluetoothDevice? _device;
   BluetoothCharacteristic? _audioChar;
   StreamSubscription<List<int>>? _audioSub;
+  StreamSubscription<BluetoothConnectionState>? _connectionSub;
   SegmentingAudioWriter? _writer;
+
+  Timer? _scanRetryTimer;
+  Timer? _setupRetryTimer;
+  bool _scanning = false;
+  bool _settingUpAudio = false;
+  bool _handlingDisconnect = false;
+  bool _destroying = false;
 
   void _report(String status) {
     FlutterForegroundTask.updateService(notificationText: status);
@@ -41,43 +46,155 @@ class OmiTaskHandler extends TaskHandler {
     // context, which is exactly why every frame was failing to decode.
     initOpus(await opus_flutter.load());
 
+    await _scanAndConnect();
+  }
+
+  Future<void> _scanAndConnect() async {
+    if (_destroying || _device != null || _scanning) return;
+
+    _scanning = true;
     _report('Scanning...');
+
     try {
-      await FlutterBluePlus.adapterState.where((s) => s == BluetoothAdapterState.on).first;
+      await FlutterBluePlus.adapterState
+          .where((s) => s == BluetoothAdapterState.on)
+          .first;
 
-      final resultsSub = FlutterBluePlus.scanResults.listen((results) async {
-        for (final r in results) {
-          if (r.advertisementData.serviceUuids.any((u) => u.str.toLowerCase() == omiServiceUuid) || r.advertisementData.advName.toLowerCase() == 'omi' || r.device.platformName.toLowerCase() == 'omi') {
-            await FlutterBluePlus.stopScan();
-            await _connect(r.device);
-            break;
-          }
-        }
-      });
-
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
-      await Future.delayed(const Duration(seconds: 15));
-      resultsSub.cancel();
-
-      if (_device == null) {
-        _report('No Omi device found.');
+      final device = await _findOmiDevice();
+      if (device == null) {
+        _report('No Omi device found - retrying automatically...');
+        _scheduleScanRetry();
+        return;
       }
+
+      await _enableAutoReconnect(device);
     } catch (e) {
-      _report('Scan failed: $e');
+      if (!_destroying) {
+        _report('Scan failed: $e - retrying automatically...');
+        _scheduleScanRetry();
+      }
+    } finally {
+      _scanning = false;
     }
   }
 
-  Future<void> _connect(BluetoothDevice device) async {
-    _report('Connecting...');
+  Future<BluetoothDevice?> _findOmiDevice() async {
+    final completer = Completer<BluetoothDevice?>();
+
+    late final StreamSubscription<List<ScanResult>> resultsSub;
+    resultsSub = FlutterBluePlus.scanResults.listen((results) {
+      if (completer.isCompleted) return;
+
+      for (final r in results) {
+        final isOmi = r.advertisementData.serviceUuids
+                .any((u) => u.str.toLowerCase() == omiServiceUuid) ||
+            r.advertisementData.advName.toLowerCase() == 'omi' ||
+            r.device.platformName.toLowerCase() == 'omi';
+
+        if (isOmi) {
+          completer.complete(r.device);
+          return;
+        }
+      }
+    });
+
     try {
-      await device.connect(license: License.nonprofit);
-      await device.connectionState.where((s) => s == BluetoothConnectionState.connected).first;
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
+      return await completer.future.timeout(
+        const Duration(seconds: 15),
+        onTimeout: () => null,
+      );
+    } finally {
+      try {
+        await FlutterBluePlus.stopScan();
+      } catch (_) {
+        // The timeout may already have stopped the scan.
+      }
+      await resultsSub.cancel();
+    }
+  }
+
+  void _scheduleScanRetry() {
+    _scanRetryTimer?.cancel();
+    _scanRetryTimer = Timer(const Duration(seconds: 10), () {
+      if (!_destroying && _device == null) {
+        unawaited(_scanAndConnect());
+      }
+    });
+  }
+
+  Future<void> _enableAutoReconnect(BluetoothDevice device) async {
+    _device = device;
+    _scanRetryTimer?.cancel();
+
+    await _connectionSub?.cancel();
+    _connectionSub = device.connectionState.listen((state) {
+      if (_destroying) return;
+
+      if (state == BluetoothConnectionState.connected) {
+        unawaited(_configureConnectedDevice(device));
+      } else if (state == BluetoothConnectionState.disconnected) {
+        unawaited(_handleDisconnected());
+      }
+    });
+
+    _report('Connecting...');
+
+    try {
+      // autoConnect is deliberately used here instead of a one-shot BLE
+      // connection. On Android it remains active across ordinary link drops
+      // and Bluetooth toggles. mtu must be null when autoConnect is enabled;
+      // we request the Omi's preferred MTU after each successful connection.
+      await device.connect(
+        license: License.nonprofit,
+        autoConnect: true,
+        mtu: null,
+      );
+
+      // connectionState normally emits the current state immediately, but
+      // this covers the case where the device was already connected before
+      // autoConnect was enabled.
+      if (device.isConnected) {
+        unawaited(_configureConnectedDevice(device));
+      } else {
+        _report('Waiting for Omi - auto-reconnect enabled...');
+      }
+    } catch (e) {
+      if (!_destroying) {
+        _report('Failed to enable auto-reconnect: $e');
+      }
+    }
+  }
+
+  Future<void> _configureConnectedDevice(BluetoothDevice device) async {
+    if (_destroying || _settingUpAudio || !device.isConnected) return;
+
+    _settingUpAudio = true;
+    _setupRetryTimer?.cancel();
+
+    try {
+      _report('Connected - setting up audio...');
+
+      await _audioSub?.cancel();
+      _audioSub = null;
+      _audioChar = null;
 
       if (Platform.isAndroid && device.mtuNow < 512) {
-        await device.requestMtu(512);
+        try {
+          await device.requestMtu(512);
+        } catch (_) {
+          // A smaller negotiated MTU can still work; service discovery and
+          // audio setup below will determine whether the link is usable.
+        }
       }
 
+      if (!device.isConnected) return;
+
+      // BLE services and characteristics must be rediscovered after every
+      // reconnect. Reusing the old characteristic object is not reliable.
       final services = await device.discoverServices();
+      if (!device.isConnected) return;
+
       final omiService = services.firstWhere(
         (s) => s.uuid.str128.toLowerCase() == omiServiceUuid,
         orElse: () => throw Exception('Omi service not found on this device'),
@@ -87,7 +204,9 @@ class OmiTaskHandler extends TaskHandler {
         (c) => c.uuid.str128.toLowerCase() == audioCodecCharacteristicUuid,
       );
       final codecValue = await codecChar.read();
-      final codec = codecValue.isNotEmpty ? parseOmiCodec(codecValue[0]) : OmiAudioCodec.unknown;
+      final codec = codecValue.isNotEmpty
+          ? parseOmiCodec(codecValue[0])
+          : OmiAudioCodec.unknown;
 
       if (codec != OmiAudioCodec.opus) {
         _report('Unexpected codec: $codec');
@@ -95,11 +214,11 @@ class OmiTaskHandler extends TaskHandler {
       }
 
       _audioChar = omiService.characteristics.firstWhere(
-        (c) => c.uuid.str128.toLowerCase() == audioDataStreamCharacteristicUuid,
+        (c) =>
+            c.uuid.str128.toLowerCase() == audioDataStreamCharacteristicUuid,
       );
-      _device = device;
 
-      _writer = SegmentingAudioWriter(
+      _writer ??= SegmentingAudioWriter(
         outputDir: outputDir,
         onStatus: _report,
         onSegmentSaved: (file, frameCount) {
@@ -111,35 +230,75 @@ class OmiTaskHandler extends TaskHandler {
       );
 
       await _audioChar!.setNotifyValue(true);
+      if (!device.isConnected) return;
+
       _audioSub = _audioChar!.lastValueStream.listen((value) {
         if (value.isEmpty) return;
-        _writer!.addPacket(value);
-      });
-
-      device.connectionState.listen((state) {
-        if (state == BluetoothConnectionState.disconnected) {
-          _writer?.flushCurrentSegment();
-          _report('Disconnected - will need manual restart.');
-        }
+        _writer?.addPacket(value);
       });
 
       _report('Listening...');
     } catch (e) {
-      _report('Connection failed: $e');
+      if (!_destroying) {
+        _report('Connection setup failed: $e - retrying...');
+        _scheduleSetupRetry(device);
+      }
+    } finally {
+      _settingUpAudio = false;
+    }
+  }
+
+  void _scheduleSetupRetry(BluetoothDevice device) {
+    _setupRetryTimer?.cancel();
+    _setupRetryTimer = Timer(const Duration(seconds: 3), () {
+      if (!_destroying && device.isConnected) {
+        unawaited(_configureConnectedDevice(device));
+      }
+    });
+  }
+
+  Future<void> _handleDisconnected() async {
+    if (_destroying || _handlingDisconnect) return;
+
+    _handlingDisconnect = true;
+    _setupRetryTimer?.cancel();
+
+    try {
+      await _audioSub?.cancel();
+      _audioSub = null;
+      _audioChar = null;
+
+      // Preserve any conversation captured up to the moment the BLE link
+      // dropped. autoConnect remains enabled on the BluetoothDevice and the
+      // connected event will rebuild services/notifications when it returns.
+      await _writer?.flushCurrentSegment();
+
+      if (!_destroying) {
+        _report('Disconnected - reconnecting automatically...');
+      }
+    } finally {
+      _handlingDisconnect = false;
     }
   }
 
   @override
   void onRepeatEvent(DateTime timestamp) {
-    // Not used - status updates are event-driven (onStatus/onSegmentSaved
-    // callbacks above), not on a fixed repeat interval.
+    // Not used - BLE connection state and retry timers are event-driven.
   }
 
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
+    _destroying = true;
+    _scanRetryTimer?.cancel();
+    _setupRetryTimer?.cancel();
+
+    await _connectionSub?.cancel();
     await _audioSub?.cancel();
     await _writer?.flushCurrentSegment();
     await _writer?.dispose();
+
+    // Calling disconnect here intentionally disables flutter_blue_plus's
+    // autoConnect only when the user actually stops the capture service.
     await _device?.disconnect();
   }
 
