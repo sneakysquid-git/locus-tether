@@ -379,7 +379,6 @@ def generate_daily_summary(target_date: date) -> dict:
     selected_points = [
         {
             "id": point_id,
-            "text": key_points[int(point_id[1:]) - 1]["text"],
             "evidence": key_points[int(point_id[1:]) - 1]["evidence"],
         }
         for point_id in selected_ids
