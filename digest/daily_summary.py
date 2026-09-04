@@ -196,10 +196,9 @@ def validate_key_points(
         if not isinstance(item, dict):
             continue
 
-        text = str(item.get("text", "")).strip()
         evidence_items = item.get("evidence", [])
 
-        if not text or not isinstance(evidence_items, list) or not evidence_items:
+        if not isinstance(evidence_items, list) or not evidence_items:
             continue
 
         validated_evidence: list[dict] = []
@@ -232,7 +231,6 @@ def validate_key_points(
 
         valid.append(
             {
-                "text": text,
                 "evidence": validated_evidence,
             }
         )
@@ -247,7 +245,6 @@ SUMMARY_SCHEMA = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string"},
                     "evidence": {
                         "type": "array",
                         "items": {
@@ -260,7 +257,7 @@ SUMMARY_SCHEMA = {
                         },
                     },
                 },
-                "required": ["text", "evidence"],
+                "required": ["evidence"],
             },
         },
     },
@@ -359,12 +356,9 @@ def generate_daily_summary(target_date: date) -> dict:
         validated = validate_key_points(result, segment_index)
 
         for item in validated:
-            identity = (
-                item["text"],
-                tuple(
-                    (evidence["source_ref"], evidence["quote"])
-                    for evidence in item["evidence"]
-                ),
+            identity = tuple(
+                (evidence["source_ref"], evidence["quote"])
+                for evidence in item["evidence"]
             )
 
             if identity in seen_points:
