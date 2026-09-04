@@ -862,16 +862,20 @@ def classifications_allow_nearby_merge(
     if left["category"] in excluded or right["category"] in excluded:
         return False
 
-    if left["category"] == right["category"]:
-        return True
-
-    # A technical work session can end with a short practical/action fragment
+    # Nearby-event merging is deliberately conservative. Overlapping evidence
+    # has already been collapsed mechanically; proximity alone is not enough
+    # to merge planning, conversations, household activity, or generic tasks.
+    #
+    # The one supported nearby merge is a continuing technical/work session.
+    # It may absorb another work point or a short action/practical fragment
     # that only makes sense in the context of the preceding troubleshooting.
-    # Keep this directional so unrelated practical chatter immediately before
-    # work is not pulled into the work event.
     if (
         left["category"] == "work_activity"
-        and right["category"] in {"action_or_task", "practical_life"}
+        and right["category"] in {
+            "work_activity",
+            "action_or_task",
+            "practical_life",
+        }
     ):
         return True
 
