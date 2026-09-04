@@ -146,7 +146,10 @@ def chunk_segments(
     current_size = 0
 
     for segment in segments:
-        line = f"[{segment.ref}] {segment.text}"
+        line = json.dumps(
+            {"source_ref": segment.ref, "text": segment.text},
+            ensure_ascii=False,
+        )
         line_size = len(line) + 1
 
         if current_lines and current_size + line_size > max_chars:
@@ -215,19 +218,28 @@ def resolve_evidence_ref(
         return requested_ref
 
     parsed = parse_source_ref(requested_ref)
-    if parsed is None:
-        return None
+    if parsed is not None:
+        recording_stem, _ = parsed
+        matches = [
+            segment.ref
+            for segment in segment_index.values()
+            if segment.ref.startswith(f"{recording_stem}:") and quote in segment.text
+        ]
 
-    recording_stem, _ = parsed
+        if len(matches) == 1:
+            return matches[0]
 
-    matches = [
+    # Some local models occasionally put the quote itself in source_ref.
+    # Repair that only when the verbatim quote identifies exactly one segment
+    # in the entire day's transcript. Ambiguous matches remain rejected.
+    exact_matches = [
         segment.ref
         for segment in segment_index.values()
-        if segment.ref.startswith(f"{recording_stem}:") and quote in segment.text
+        if quote == segment.text
     ]
 
-    if len(matches) == 1:
-        return matches[0]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
 
     return None
 
@@ -311,9 +323,10 @@ STRICT RULES:
 - Every key point must represent one coherent event or topic.
 - Evidence for one key point should normally come from the same recording and nearby segments.
 - A key point may use multiple adjacent transcript segments when needed.
+- Each TRANSCRIPT line is a JSON object with source_ref and text fields.
 - evidence must be an array of source references and exact verbatim quotes.
-- Copy source_ref exactly from the transcript reference, without square brackets.
-- Copy every quote exactly from its referenced transcript line.
+- Copy the source_ref field value exactly into evidence.source_ref.
+- Copy the text field value exactly into evidence.quote.
 - Never merge unrelated events into one key point.
 - Do not invent names, relationships, motives, locations, dates, or conclusions.
 - Ignore greetings, filler, fragments, and trivial chatter unless genuinely significant.
