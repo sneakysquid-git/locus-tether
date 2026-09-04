@@ -203,6 +203,8 @@ def validate_key_points(
 
         text = str(item.get("text", "")).strip()
         source_ref = str(item.get("source_ref", "")).strip()
+        if source_ref.startswith("[") and source_ref.endswith("]"):
+            source_ref = source_ref[1:-1].strip()
         evidence = str(item.get("evidence", "")).strip()
 
         if not text:
