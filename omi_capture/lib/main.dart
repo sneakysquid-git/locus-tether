@@ -258,7 +258,7 @@ class _CapturePageState extends State<CapturePage> {
                   });
                 },
               ),
-            ],           
+            ],
             const SizedBox(height: 24),
             if (!_isRunning)
               ElevatedButton(onPressed: _startService, child: const Text('Start Listening'))

@@ -417,7 +417,7 @@ class OmiTaskHandler extends TaskHandler {
         final value = data['value'] as int?;
         if (value == null) return;
         unawaited(_setLedBrightness(value));
-    }    
+    }
   }
 
   @override
