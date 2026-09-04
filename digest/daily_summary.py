@@ -23,6 +23,7 @@ OLLAMA_TIMEOUT = int(os.environ.get("OMI_OLLAMA_TIMEOUT", "300"))
 CHUNK_MAX_CHARS = int(os.environ.get("OMI_SUMMARY_CHUNK_CHARS", "12000"))
 CLASSIFY_MAX_CHARS = int(os.environ.get("OMI_CLASSIFY_MAX_CHARS", "24000"))
 CLASSIFY_MAX_POINTS = int(os.environ.get("OMI_CLASSIFY_MAX_POINTS", "8"))
+MERGE_MAX_SEGMENT_GAP = int(os.environ.get("OMI_MERGE_MAX_SEGMENT_GAP", "12"))
 MAX_EVIDENCE_SEGMENT_SPAN = int(
     os.environ.get("OMI_EVIDENCE_MAX_SEGMENT_SPAN", "12")
 )
@@ -730,6 +731,193 @@ def points_overlap(first: dict, second: dict) -> bool:
     return intersection / smaller >= 0.6
 
 
+def point_ref_span(point: dict) -> tuple[str, int, int] | None:
+    parsed_refs = [
+        parsed
+        for parsed in (
+            parse_source_ref(item["source_ref"])
+            for item in point["evidence"]
+        )
+        if parsed is not None
+    ]
+
+    if not parsed_refs:
+        return None
+
+    recording_stems = {recording_stem for recording_stem, _ in parsed_refs}
+    if len(recording_stems) != 1:
+        return None
+
+    indices = [index for _, index in parsed_refs]
+    return next(iter(recording_stems)), min(indices), max(indices)
+
+
+def merge_point_records(points: list[dict]) -> dict:
+    if not points:
+        raise ValueError("Cannot merge an empty point list")
+
+    source_point_ids: list[str] = []
+    seen_source_ids: set[str] = set()
+    evidence: list[dict] = []
+    seen_evidence: set[tuple[str, str]] = set()
+
+    for point in points:
+        point_source_ids = point.get("source_point_ids", [point["id"]])
+
+        for point_id in point_source_ids:
+            if point_id in seen_source_ids:
+                continue
+            seen_source_ids.add(point_id)
+            source_point_ids.append(point_id)
+
+        for item in point["evidence"]:
+            identity = (item["source_ref"], item["quote"])
+            if identity in seen_evidence:
+                continue
+            seen_evidence.add(identity)
+            evidence.append(
+                {
+                    "source_ref": item["source_ref"],
+                    "quote": item["quote"],
+                }
+            )
+
+    evidence.sort(
+        key=lambda item: (
+            parse_source_ref(item["source_ref"]) or ("", 0),
+            item["quote"],
+        )
+    )
+
+    return {
+        "id": source_point_ids[0],
+        "source_point_ids": source_point_ids,
+        "evidence": evidence,
+    }
+
+
+def collapse_overlapping_points(points: list[dict]) -> list[dict]:
+    collapsed: list[dict] = []
+
+    for point in sorted(points, key=key_point_sort_key):
+        candidate = merge_point_records([point])
+
+        while True:
+            match_index = None
+
+            for index, existing in enumerate(collapsed):
+                if points_overlap(existing, candidate):
+                    match_index = index
+                    break
+
+            if match_index is None:
+                break
+
+            candidate = merge_point_records(
+                [collapsed.pop(match_index), candidate]
+            )
+
+        collapsed.append(candidate)
+        collapsed.sort(key=key_point_sort_key)
+
+    return collapsed
+
+
+def point_segment_gap(first: dict, second: dict) -> int | None:
+    first_span = point_ref_span(first)
+    second_span = point_ref_span(second)
+
+    if first_span is None or second_span is None:
+        return None
+
+    first_stem, _, first_end = first_span
+    second_stem, second_start, _ = second_span
+
+    if first_stem != second_stem:
+        return None
+
+    if second_start <= first_end:
+        return 0
+
+    return max(0, second_start - first_end - 1)
+
+
+def classifications_allow_nearby_merge(
+    left: dict,
+    right: dict,
+) -> bool:
+    if left["activity_mode"] != "active_or_interactive":
+        return False
+    if right["activity_mode"] != "active_or_interactive":
+        return False
+
+    if left["relevance"] < 2 or right["relevance"] < 2:
+        return False
+
+    excluded = {
+        "ambient_media",
+        "noise_or_fragment",
+        "leisure_conversation",
+    }
+    if left["category"] in excluded or right["category"] in excluded:
+        return False
+
+    if left["category"] == right["category"]:
+        return True
+
+    # A technical work session can end with a short practical/action fragment
+    # that only makes sense in the context of the preceding troubleshooting.
+    # Keep this directional so unrelated practical chatter immediately before
+    # work is not pulled into the work event.
+    if (
+        left["category"] == "work_activity"
+        and right["category"] in {"action_or_task", "practical_life"}
+    ):
+        return True
+
+    return False
+
+
+def merge_nearby_points(
+    points: list[dict],
+    classifications: dict[str, dict],
+    max_gap: int = MERGE_MAX_SEGMENT_GAP,
+) -> tuple[list[dict], set[str]]:
+    merged: list[dict] = []
+    reclassify_ids: set[str] = set()
+
+    for point in sorted(points, key=key_point_sort_key):
+        candidate = merge_point_records([point])
+
+        if not merged:
+            merged.append(candidate)
+            continue
+
+        previous = merged[-1]
+        gap = point_segment_gap(previous, candidate)
+        left_classification = classifications.get(previous["id"])
+        right_classification = classifications.get(candidate["id"])
+
+        if (
+            gap is not None
+            and gap <= max_gap
+            and left_classification is not None
+            and right_classification is not None
+            and classifications_allow_nearby_merge(
+                left_classification,
+                right_classification,
+            )
+        ):
+            combined = merge_point_records([previous, candidate])
+            merged[-1] = combined
+            reclassify_ids.add(combined["id"])
+            continue
+
+        merged.append(candidate)
+
+    return merged, reclassify_ids
+
+
 def should_select(classification: dict) -> bool:
     if classification["activity_mode"] == "passive_media":
         return False
@@ -811,8 +999,13 @@ def generate_daily_summary(target_date: date) -> dict:
             "segments": 0,
             "chunks": 0,
             "classification_chunks": 0,
+            "initial_classification_chunks": 0,
+            "reclassification_chunks": 0,
             "selected_points": [],
             "evidence_points": [],
+            "collapsed_points": [],
+            "merged_points": [],
+            "initial_classified_points": [],
             "classified_points": [],
         }
 
@@ -828,18 +1021,63 @@ def generate_daily_summary(target_date: date) -> dict:
 
     key_points = deduplicate_key_points(extracted_points)
     point_records = make_point_records(key_points)
-    classification_chunks = chunk_points_for_classification(point_records)
-    classifications = classify_points(point_records)
-    selected_points = select_daily_points(point_records, classifications)
+    collapsed_points = collapse_overlapping_points(point_records)
+
+    initial_classification_chunks = chunk_points_for_classification(
+        collapsed_points
+    )
+    initial_classifications = classify_points(collapsed_points)
+
+    merged_points, reclassify_ids = merge_nearby_points(
+        collapsed_points,
+        initial_classifications,
+    )
+
+    classifications = {
+        point["id"]: initial_classifications[point["id"]]
+        for point in merged_points
+        if (
+            point["id"] not in reclassify_ids
+            and point["id"] in initial_classifications
+        )
+    }
+
+    reclassify_points = [
+        point
+        for point in merged_points
+        if point["id"] in reclassify_ids
+    ]
+    reclassification_chunks = chunk_points_for_classification(
+        reclassify_points
+    )
+
+    if reclassify_points:
+        classifications.update(classify_points(reclassify_points))
+
+    selected_points = select_daily_points(merged_points, classifications)
+
+    initial_classified_points = [
+        {
+            **point,
+            **initial_classifications[point["id"]],
+        }
+        for point in collapsed_points
+        if point["id"] in initial_classifications
+    ]
 
     classified_points = [
         {
             **point,
             **classifications[point["id"]],
         }
-        for point in point_records
+        for point in merged_points
         if point["id"] in classifications
     ]
+
+    classification_chunks = (
+        len(initial_classification_chunks)
+        + len(reclassification_chunks)
+    )
 
     recordings = len({segment.source_file for segment in segments})
 
@@ -849,9 +1087,14 @@ def generate_daily_summary(target_date: date) -> dict:
         "recordings": recordings,
         "segments": len(segments),
         "chunks": len(chunks),
-        "classification_chunks": len(classification_chunks),
+        "classification_chunks": classification_chunks,
+        "initial_classification_chunks": len(initial_classification_chunks),
+        "reclassification_chunks": len(reclassification_chunks),
         "selected_points": selected_points,
         "evidence_points": point_records,
+        "collapsed_points": collapsed_points,
+        "merged_points": merged_points,
+        "initial_classified_points": initial_classified_points,
         "classified_points": classified_points,
     }
 
