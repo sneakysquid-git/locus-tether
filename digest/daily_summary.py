@@ -22,6 +22,7 @@ OLLAMA_TIMEOUT = int(os.environ.get("OMI_OLLAMA_TIMEOUT", "300"))
 
 CHUNK_MAX_CHARS = int(os.environ.get("OMI_SUMMARY_CHUNK_CHARS", "12000"))
 CLASSIFY_MAX_CHARS = int(os.environ.get("OMI_CLASSIFY_MAX_CHARS", "24000"))
+CLASSIFY_MAX_POINTS = int(os.environ.get("OMI_CLASSIFY_MAX_POINTS", "8"))
 MAX_EVIDENCE_SEGMENT_SPAN = int(
     os.environ.get("OMI_EVIDENCE_MAX_SEGMENT_SPAN", "12")
 )
@@ -536,6 +537,7 @@ def point_for_classification(point: dict) -> dict:
 def chunk_points_for_classification(
     points: list[dict],
     max_chars: int = CLASSIFY_MAX_CHARS,
+    max_points: int = CLASSIFY_MAX_POINTS,
 ) -> list[list[dict]]:
     chunks: list[list[dict]] = []
     current: list[dict] = []
@@ -546,7 +548,10 @@ def chunk_points_for_classification(
         encoded = json.dumps(compact, ensure_ascii=False)
         size = len(encoded) + 1
 
-        if current and current_size + size > max_chars:
+        if current and (
+            len(current) >= max_points
+            or current_size + size > max_chars
+        ):
             chunks.append(current)
             current = []
             current_size = 0
@@ -602,10 +607,29 @@ STRICT RULES:
 - Do not create new point IDs.
 - Judge only from the evidence shown.
 - Passive media must be activity_mode=passive_media and normally category=ambient_media.
-- A long fluent monologue about a product, game, film, music, news, or technical topic is likely ambient_media unless the evidence clearly shows an interactive conversation or active work.
+- First-person wording does NOT prove that the wearer is actively participating.
+- A fluent one-way review or commentary about a game, product, film, music,
+  news, or technical topic MUST be ambient_media/passive_media when the
+  evidence resembles captured playback rather than an actual interaction.
+  This remains true even if it says things such as "I played", "I reviewed",
+  "I think", or "I know".
+- Active troubleshooting, configuring, testing, fixing, or building hardware
+  or software should be work_activity/active_or_interactive unless the
+  evidence clearly shows an ordinary household task.
+- A short instruction, question, or fragment without enough context to know
+  why it matters should be noise_or_fragment or low relevance. Do not promote
+  phrases such as "put the lid back on" into high-relevance tasks by
+  themselves.
+- Do not classify a question or hypothetical as decision_or_commitment unless
+  the evidence shows an actual decision, agreement, promise, or commitment.
 - Explicit tasks, commitments, plans, purchases, troubleshooting, work progress, and meaningful interpersonal discussions should rank above general chatter.
 - Do not turn an interesting topic into a high-relevance event merely because the content itself is interesting.
 - Do not infer hidden context.
+
+CLASSIFICATION EXAMPLES:
+- Game-review-style monologue mentioning a reviewed PC version -> ambient_media, passive_media, relevance 0 or 1.
+- "Scanning can't find anything" while trying to configure or fix equipment -> work_activity, active_or_interactive, relevance 2 or 3.
+- "You just put the lid back on" with no useful surrounding context -> noise_or_fragment, unclear, relevance 0 or 1.
 
 VALIDATED EVIDENCE GROUPS:
 {payload}
