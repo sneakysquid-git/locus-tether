@@ -21,6 +21,7 @@ OLLAMA_MODEL = os.environ.get("OMI_SUMMARY_MODEL", "qwen2.5:7b-instruct")
 OLLAMA_TIMEOUT = int(os.environ.get("OMI_OLLAMA_TIMEOUT", "300"))
 
 CHUNK_MAX_CHARS = int(os.environ.get("OMI_SUMMARY_CHUNK_CHARS", "12000"))
+CLASSIFY_MAX_CHARS = int(os.environ.get("OMI_CLASSIFY_MAX_CHARS", "24000"))
 MAX_EVIDENCE_SEGMENT_SPAN = int(
     os.environ.get("OMI_EVIDENCE_MAX_SEGMENT_SPAN", "12")
 )
@@ -28,6 +29,42 @@ MAX_SELECTED_POINTS = int(os.environ.get("OMI_SUMMARY_MAX_POINTS", "12"))
 
 _FILENAME_RE = re.compile(r"^omi-(\d{8})_(\d{6})\.json$")
 _REF_RE = re.compile(r"^(omi-\d{8}_\d{6}):(\d+):(-?\d+(?:\.\d+)?)$")
+
+CATEGORIES = (
+    "action_or_task",
+    "decision_or_commitment",
+    "work_activity",
+    "important_conversation",
+    "personal_planning",
+    "practical_life",
+    "leisure_conversation",
+    "ambient_media",
+    "noise_or_fragment",
+)
+
+ACTIVITY_MODES = (
+    "active_or_interactive",
+    "passive_media",
+    "unclear",
+)
+
+CATEGORY_BASE_SCORE = {
+    "decision_or_commitment": 90,
+    "action_or_task": 85,
+    "work_activity": 80,
+    "important_conversation": 75,
+    "personal_planning": 70,
+    "practical_life": 60,
+    "leisure_conversation": 25,
+    "ambient_media": -1000,
+    "noise_or_fragment": -1000,
+}
+
+ACTIVITY_MODE_SCORE = {
+    "active_or_interactive": 15,
+    "unclear": 0,
+    "passive_media": -1000,
+}
 
 
 @dataclass(frozen=True)
@@ -69,15 +106,39 @@ SUMMARY_SCHEMA = {
 }
 
 
-DAILY_SUMMARY_SCHEMA = {
+CLASSIFICATION_SCHEMA = {
     "type": "object",
     "properties": {
-        "selected_ids": {
+        "classifications": {
             "type": "array",
-            "items": {"type": "string"},
+            "items": {
+                "type": "object",
+                "properties": {
+                    "point_id": {"type": "string"},
+                    "category": {
+                        "type": "string",
+                        "enum": list(CATEGORIES),
+                    },
+                    "activity_mode": {
+                        "type": "string",
+                        "enum": list(ACTIVITY_MODES),
+                    },
+                    "relevance": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 3,
+                    },
+                },
+                "required": [
+                    "point_id",
+                    "category",
+                    "activity_mode",
+                    "relevance",
+                ],
+            },
         },
     },
-    "required": ["selected_ids"],
+    "required": ["classifications"],
 }
 
 
@@ -223,15 +284,16 @@ def resolve_evidence_ref(
         matches = [
             segment.ref
             for segment in segment_index.values()
-            if segment.ref.startswith(f"{recording_stem}:") and quote in segment.text
+            if segment.ref.startswith(f"{recording_stem}:")
+            and quote in segment.text
         ]
 
         if len(matches) == 1:
             return matches[0]
 
     # Some local models occasionally put the quote itself in source_ref.
-    # Repair that only when the verbatim quote identifies exactly one segment
-    # in the entire day's transcript. Ambiguous matches remain rejected.
+    # Repair only when the exact quote identifies exactly one transcript
+    # segment in the whole day. Ambiguous matches are rejected.
     exact_matches = [
         segment.ref
         for segment in segment_index.values()
@@ -313,27 +375,32 @@ def call_ollama(prompt: str, schema: dict) -> dict:
 def extract_chunk_summary(chunk: str) -> dict:
     prompt = f"""Analyse this automatically recorded transcript chunk.
 
-Extract only meaningful facts, events, topics, outcomes, decisions, or commitments
-that would be useful in a daily activity summary.
+Extract only coherent events, activities, discussions, decisions, commitments,
+plans, or practical matters that could potentially be useful in a daily
+activity summary.
 
-The "text" field is only an internal scratch label to help you keep separate events
-separate. It will not be trusted or stored as factual output.
+Each transcript line is a JSON object with separate "source_ref" and "text"
+fields. Copy those values into evidence; do not swap them.
+
+The "text" field in each key point is only an internal scratch label to help
+you keep separate events separate. It will not be trusted or stored as factual
+output.
 
 STRICT RULES:
 - Every key point must represent one coherent event or topic.
 - Evidence for one key point should normally come from the same recording and nearby segments.
 - A key point may use multiple adjacent transcript segments when needed.
-- Each TRANSCRIPT line is a JSON object with source_ref and text fields.
 - evidence must be an array of source references and exact verbatim quotes.
-- Copy the source_ref field value exactly into evidence.source_ref.
-- Copy the text field value exactly into evidence.quote.
+- Copy source_ref exactly from the transcript object's "source_ref" field.
+- Copy quote exactly from that transcript object's "text" field.
 - Never merge unrelated events into one key point.
 - Do not invent names, relationships, motives, locations, dates, or conclusions.
-- Ignore greetings, filler, fragments, and trivial chatter unless genuinely significant.
-- Prefer a small number of useful points over exhaustive transcription.
-- If nothing meaningful is present, return an empty key_points array.
+- Do not decide whether something is passive media here; later processing will classify it.
+- Ignore obvious filler and fragments unless they are needed to understand a useful event.
+- Prefer a small number of coherent points over exhaustive transcription.
+- If nothing potentially useful is present, return an empty key_points array.
 
-TRANSCRIPT:
+TRANSCRIPT JSON LINES:
 {chunk}
 """
 
@@ -370,7 +437,11 @@ def validate_key_points(
             requested_ref = str(evidence.get("source_ref", "")).strip()
             quote = str(evidence.get("quote", "")).strip()
 
-            resolved_ref = resolve_evidence_ref(requested_ref, quote, segment_index)
+            resolved_ref = resolve_evidence_ref(
+                requested_ref,
+                quote,
+                segment_index,
+            )
             if resolved_ref is None:
                 item_is_valid = False
                 break
@@ -416,80 +487,293 @@ def key_point_sort_key(point: dict) -> tuple[str, int]:
 
 def deduplicate_key_points(key_points: list[dict]) -> list[dict]:
     deduplicated: list[dict] = []
-    seen: set[tuple[tuple[str, str], ...]] = set()
+    seen_evidence: set[tuple[tuple[str, str], ...]] = set()
+    seen_ref_sets: set[tuple[str, ...]] = set()
 
     for item in sorted(key_points, key=key_point_sort_key):
-        identity = tuple(
+        evidence_identity = tuple(
             (evidence["source_ref"], evidence["quote"])
             for evidence in item["evidence"]
         )
+        ref_identity = tuple(
+            evidence["source_ref"]
+            for evidence in item["evidence"]
+        )
 
-        if identity in seen:
+        if evidence_identity in seen_evidence or ref_identity in seen_ref_sets:
             continue
 
-        seen.add(identity)
+        seen_evidence.add(evidence_identity)
+        seen_ref_sets.add(ref_identity)
         deduplicated.append(item)
 
     return deduplicated
 
 
-def synthesise_daily_summary(key_points: list[dict]) -> dict:
-    if not key_points:
-        return {"selected_ids": []}
-
-    lines: list[str] = []
-
-    for index, item in enumerate(key_points, 1):
-        point_id = f"P{index:04d}"
-        quotes = " ".join(evidence["quote"] for evidence in item["evidence"])
-        lines.append(f"[{point_id}] Evidence: {quotes}")
-
-    evidence_text = "\n\n".join(lines)
-
-    prompt = f"""Select the most useful validated evidence groups for a daily activity summary.
-
-STRICT RULES:
-- You may ONLY select point IDs from the list below.
-- Do not create, rewrite, or infer any factual content.
-- Select points representing meaningful activities, discussions, decisions,
-  commitments, or events.
-- Ignore trivial chatter, repetition, incomplete fragments, and low-value observations.
-- Prefer a concise selection rather than including everything.
-- Return selected_ids in chronological order.
-- Select no more than {MAX_SELECTED_POINTS} points.
-- If none are useful, return an empty selected_ids array.
-
-VALIDATED EVIDENCE GROUPS:
-{evidence_text}
-"""
-
-    return call_ollama(prompt, DAILY_SUMMARY_SCHEMA)
+def make_point_records(key_points: list[dict]) -> list[dict]:
+    return [
+        {
+            "id": f"P{index:04d}",
+            "evidence": point["evidence"],
+        }
+        for index, point in enumerate(key_points, 1)
+    ]
 
 
-def validate_selected_ids(result: dict, key_points: list[dict]) -> list[str]:
-    valid_ids = {
-        f"P{index:04d}"
-        for index in range(1, len(key_points) + 1)
+def point_for_classification(point: dict) -> dict:
+    return {
+        "point_id": point["id"],
+        "evidence": [
+            {
+                "source_ref": item["source_ref"],
+                "quote": item["quote"],
+            }
+            for item in point["evidence"]
+        ],
     }
 
-    selected_ids = result.get("selected_ids", [])
-    if not isinstance(selected_ids, list):
-        return []
 
-    validated: list[str] = []
-    seen: set[str] = set()
+def chunk_points_for_classification(
+    points: list[dict],
+    max_chars: int = CLASSIFY_MAX_CHARS,
+) -> list[list[dict]]:
+    chunks: list[list[dict]] = []
+    current: list[dict] = []
+    current_size = 0
 
-    for raw_point_id in selected_ids:
-        point_id = str(raw_point_id).strip()
+    for point in points:
+        compact = point_for_classification(point)
+        encoded = json.dumps(compact, ensure_ascii=False)
+        size = len(encoded) + 1
 
-        if point_id not in valid_ids or point_id in seen:
+        if current and current_size + size > max_chars:
+            chunks.append(current)
+            current = []
+            current_size = 0
+
+        current.append(compact)
+        current_size += size
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def classify_point_chunk(points: list[dict]) -> dict:
+    payload = "\n".join(
+        json.dumps(point, ensure_ascii=False)
+        for point in points
+    )
+
+    prompt = f"""Classify each validated evidence group by how useful it is for
+summarising the wearer's actual day.
+
+This is a wearable microphone transcript. It can capture:
+- things the wearer actively did or discussed;
+- conversations around the wearer;
+- television, YouTube, podcasts, music commentary, games, or other passive media;
+- random fragments and background speech.
+
+CATEGORIES:
+- action_or_task: an explicit task, instruction, follow-up, or thing to do.
+- decision_or_commitment: a clear decision, promise, agreement, or commitment.
+- work_activity: active work, troubleshooting, building, configuring, meetings, or business activity.
+- important_conversation: a substantive interpersonal discussion worth remembering.
+- personal_planning: plans, arrangements, travel, events, or preparation.
+- practical_life: useful household, family, shopping, clothing, transport, or day-to-day logistics.
+- leisure_conversation: genuine interactive discussion about hobbies, entertainment, music, games, etc.
+- ambient_media: passive recorded media or a one-way review/podcast/video/TV-like monologue that is not evidence of what the wearer did.
+- noise_or_fragment: too fragmentary, trivial, or contextless to be useful.
+
+ACTIVITY MODE:
+- active_or_interactive: evidence looks like the wearer was doing something or participating in an interaction.
+- passive_media: evidence looks primarily like captured media, playback, broadcast, review, podcast, video, TV, or other passive content.
+- unclear: there is not enough evidence to tell.
+
+RELEVANCE:
+- 3: materially useful for recalling the day or future action.
+- 2: useful supporting detail.
+- 1: minor but potentially relevant.
+- 0: not useful for a daily activity summary.
+
+STRICT RULES:
+- Return one classification for every point_id supplied.
+- Do not create new point IDs.
+- Judge only from the evidence shown.
+- Passive media must be activity_mode=passive_media and normally category=ambient_media.
+- A long fluent monologue about a product, game, film, music, news, or technical topic is likely ambient_media unless the evidence clearly shows an interactive conversation or active work.
+- Explicit tasks, commitments, plans, purchases, troubleshooting, work progress, and meaningful interpersonal discussions should rank above general chatter.
+- Do not turn an interesting topic into a high-relevance event merely because the content itself is interesting.
+- Do not infer hidden context.
+
+VALIDATED EVIDENCE GROUPS:
+{payload}
+"""
+
+    return call_ollama(prompt, CLASSIFICATION_SCHEMA)
+
+
+def validate_classifications(
+    result: dict,
+    points: list[dict],
+) -> dict[str, dict]:
+    valid_ids = {point["id"] for point in points}
+    validated: dict[str, dict] = {}
+
+    raw = result.get("classifications", [])
+    if not isinstance(raw, list):
+        return validated
+
+    for item in raw:
+        if not isinstance(item, dict):
             continue
 
-        seen.add(point_id)
-        validated.append(point_id)
+        point_id = str(item.get("point_id", "")).strip()
+        category = str(item.get("category", "")).strip()
+        activity_mode = str(item.get("activity_mode", "")).strip()
 
-    validated.sort(key=lambda point_id: int(point_id[1:]))
-    return validated[:MAX_SELECTED_POINTS]
+        try:
+            relevance = int(item.get("relevance", -1))
+        except (TypeError, ValueError):
+            continue
+
+        if point_id not in valid_ids:
+            continue
+        if category not in CATEGORIES:
+            continue
+        if activity_mode not in ACTIVITY_MODES:
+            continue
+        if relevance < 0 or relevance > 3:
+            continue
+
+        validated[point_id] = {
+            "category": category,
+            "activity_mode": activity_mode,
+            "relevance": relevance,
+        }
+
+    return validated
+
+
+def classify_points(points: list[dict]) -> dict[str, dict]:
+    classifications: dict[str, dict] = {}
+
+    for point_chunk in chunk_points_for_classification(points):
+        raw = classify_point_chunk(point_chunk)
+        chunk_ids = {item["point_id"] for item in point_chunk}
+        expected_points = [
+            point
+            for point in points
+            if point["id"] in chunk_ids
+        ]
+        classifications.update(
+            validate_classifications(raw, expected_points)
+        )
+
+    return classifications
+
+
+def classification_score(classification: dict) -> int:
+    category = classification["category"]
+    activity_mode = classification["activity_mode"]
+    relevance = classification["relevance"]
+
+    return (
+        CATEGORY_BASE_SCORE.get(category, -1000)
+        + ACTIVITY_MODE_SCORE.get(activity_mode, -1000)
+        + (relevance * 10)
+    )
+
+
+def point_ref_set(point: dict) -> set[str]:
+    return {
+        evidence["source_ref"]
+        for evidence in point["evidence"]
+    }
+
+
+def points_overlap(first: dict, second: dict) -> bool:
+    first_refs = point_ref_set(first)
+    second_refs = point_ref_set(second)
+
+    if not first_refs or not second_refs:
+        return False
+
+    intersection = len(first_refs & second_refs)
+    smaller = min(len(first_refs), len(second_refs))
+
+    return intersection / smaller >= 0.6
+
+
+def should_select(classification: dict) -> bool:
+    if classification["activity_mode"] == "passive_media":
+        return False
+
+    if classification["category"] in {"ambient_media", "noise_or_fragment"}:
+        return False
+
+    if classification["relevance"] <= 0:
+        return False
+
+    if classification["category"] == "leisure_conversation":
+        return classification["relevance"] >= 3
+
+    if classification["category"] in {
+        "action_or_task",
+        "decision_or_commitment",
+    }:
+        return classification["relevance"] >= 1
+
+    return classification["relevance"] >= 2
+
+
+def select_daily_points(
+    points: list[dict],
+    classifications: dict[str, dict],
+) -> list[dict]:
+    candidates: list[dict] = []
+
+    for point in points:
+        classification = classifications.get(point["id"])
+        if classification is None:
+            continue
+
+        if not should_select(classification):
+            continue
+
+        candidates.append(
+            {
+                **point,
+                **classification,
+                "score": classification_score(classification),
+            }
+        )
+
+    candidates.sort(
+        key=lambda item: (
+            -item["score"],
+            key_point_sort_key(item),
+        )
+    )
+
+    selected: list[dict] = []
+
+    for candidate in candidates:
+        if any(points_overlap(candidate, existing) for existing in selected):
+            continue
+
+        selected.append(candidate)
+
+        if len(selected) >= MAX_SELECTED_POINTS:
+            break
+
+    selected.sort(key=key_point_sort_key)
+
+    for item in selected:
+        item.pop("score", None)
+
+    return selected
 
 
 def generate_daily_summary(target_date: date) -> dict:
@@ -502,8 +786,10 @@ def generate_daily_summary(target_date: date) -> dict:
             "recordings": 0,
             "segments": 0,
             "chunks": 0,
+            "classification_chunks": 0,
             "selected_points": [],
             "evidence_points": [],
+            "classified_points": [],
         }
 
     segment_index = build_segment_index(segments)
@@ -512,18 +798,23 @@ def generate_daily_summary(target_date: date) -> dict:
 
     for chunk in chunks:
         raw_result = extract_chunk_summary(chunk)
-        extracted_points.extend(validate_key_points(raw_result, segment_index))
+        extracted_points.extend(
+            validate_key_points(raw_result, segment_index)
+        )
 
     key_points = deduplicate_key_points(extracted_points)
-    selection = synthesise_daily_summary(key_points)
-    selected_ids = validate_selected_ids(selection, key_points)
+    point_records = make_point_records(key_points)
+    classification_chunks = chunk_points_for_classification(point_records)
+    classifications = classify_points(point_records)
+    selected_points = select_daily_points(point_records, classifications)
 
-    selected_points = [
+    classified_points = [
         {
-            "id": point_id,
-            "evidence": key_points[int(point_id[1:]) - 1]["evidence"],
+            **point,
+            **classifications[point["id"]],
         }
-        for point_id in selected_ids
+        for point in point_records
+        if point["id"] in classifications
     ]
 
     recordings = len({segment.source_file for segment in segments})
@@ -534,9 +825,23 @@ def generate_daily_summary(target_date: date) -> dict:
         "recordings": recordings,
         "segments": len(segments),
         "chunks": len(chunks),
+        "classification_chunks": len(classification_chunks),
         "selected_points": selected_points,
-        "evidence_points": key_points,
+        "evidence_points": point_records,
+        "classified_points": classified_points,
     }
+
+
+def category_heading(category: str) -> str:
+    return {
+        "action_or_task": "Tasks and follow-ups",
+        "decision_or_commitment": "Decisions and commitments",
+        "work_activity": "Work activity",
+        "important_conversation": "Important conversations",
+        "personal_planning": "Plans",
+        "practical_life": "Practical",
+        "leisure_conversation": "Leisure",
+    }.get(category, category.replace("_", " ").title())
 
 
 def render_markdown(result: dict) -> str:
@@ -546,10 +851,8 @@ def render_markdown(result: dict) -> str:
         (
             f"{result['recordings']} recordings | "
             f"{result['segments']} transcript segments | "
-            f"{result['chunks']} processing chunks"
+            f"{result['chunks']} extraction chunks"
         ),
-        "",
-        "## Highlights",
         "",
     ]
 
@@ -560,20 +863,46 @@ def render_markdown(result: dict) -> str:
         lines.append("")
         return "\n".join(lines)
 
+    grouped: dict[str, list[dict]] = {}
+
     for point in selected_points:
-        evidence = point.get("evidence", [])
-        if not evidence:
+        grouped.setdefault(point["category"], []).append(point)
+
+    category_order = [
+        "action_or_task",
+        "decision_or_commitment",
+        "work_activity",
+        "important_conversation",
+        "personal_planning",
+        "practical_life",
+        "leisure_conversation",
+    ]
+
+    for category in category_order:
+        points = grouped.get(category, [])
+        if not points:
             continue
 
-        first = evidence[0]
-        lines.append(f"- {first['quote']}")
-        lines.append(f"  Source: `{first['source_ref']}`")
+        lines.append(f"## {category_heading(category)}")
+        lines.append("")
 
-        for extra in evidence[1:]:
-            lines.append(f"  - {extra['quote']}")
-            lines.append(f"    Source: `{extra['source_ref']}`")
+        for point in points:
+            evidence = point.get("evidence", [])
+            if not evidence:
+                continue
 
-    lines.append("")
+            lines.append(f"- {evidence[0]['quote']}")
+            lines.append(
+                f"  Source: `{evidence[0]['source_ref']}` "
+                f"(relevance {point['relevance']}/3)"
+            )
+
+            for extra in evidence[1:]:
+                lines.append(f"  - {extra['quote']}")
+                lines.append(f"    Source: `{extra['source_ref']}`")
+
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -588,7 +917,10 @@ def write_daily_summary(result: dict) -> tuple[Path, Path]:
         json.dumps(result, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
-    markdown_path.write_text(render_markdown(result), encoding="utf-8")
+    markdown_path.write_text(
+        render_markdown(result),
+        encoding="utf-8",
+    )
 
     return json_path, markdown_path
 
